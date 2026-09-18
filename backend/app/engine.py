@@ -4,9 +4,11 @@ import json
 import math
 import os
 import re
+import time as _time
 from datetime import date, datetime, time, timedelta
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+from concurrent.futures import ThreadPoolExecutor
 
 from .amap_client import AMapClient
 from .poi_client import fetch_city_pois, fetch_nearby_pois
@@ -30,6 +32,14 @@ except Exception:  # pragma: no cover - stdlib fallback
 
 AMAP = AMapClient()
 TRAIN12306 = MCP12306Client()
+
+# 进程级 POI 缓存与共享线程池：避免重复生成时反复请求外部 POI 源
+_POI_CACHE: dict[str, tuple[float, list[Poi], list[Poi]]] = {}
+_POI_CACHE_TTL = 86400.0
+_POI_POOL = ThreadPoolExecutor(max_workers=6, thread_name_prefix="poi")
+# OSM 可用性熔断：国内环境 Overpass/Nominatim 常不可达，失败一次后 1 小时直连内置数据
+_OSM_UNAVAILABLE_UNTIL = 0.0
+_OSM_COOLDOWN = 3600.0
 try:
     LOCAL_TZ = ZoneInfo("Asia/Shanghai") if ZoneInfo else None
 except Exception:  # pragma: no cover - OS tzdata fallback
@@ -1351,6 +1361,25 @@ def _city_fallback_pois(city: str) -> tuple[list[Poi], list[Poi]]:
                 Poi("冒菜馆", "restaurant", True, 1, ("local", "spicy"), 30.6610, 104.0710),
                 Poi("糖油果子摊", "snack", True, 1, ("local", "street_food"), 30.6655, 104.0599),
                 Poi("盖碗茶铺", "dessert", True, 1, ("local", "dessert"), 30.6682, 104.0541),
+            ],
+        )
+    if "xian" in c or "西安" in city:
+        return (
+            [
+                Poi("大雁塔", "landmark", False, 2, ("culture", "history", "landmark"), 34.2186, 108.9640),
+                Poi("秦始皇兵马俑博物馆", "museum", True, 3, ("culture", "history", "indoor"), 34.3853, 109.2787),
+                Poi("华清宫", "attraction", False, 2, ("history", "view", "local"), 34.3600, 109.2100),
+                Poi("西安城墙·永宁门", "landmark", False, 1, ("view", "walking", "landmark"), 34.2530, 108.9420),
+                Poi("陕西历史博物馆", "museum", True, 1, ("culture", "history", "indoor"), 34.2246, 108.9526),
+                Poi("回民街", "district", False, 1, ("local", "street_food", "walking"), 34.2661, 108.9405),
+            ],
+            [
+                Poi("肉夹馍铺", "snack", True, 1, ("local", "savory"), 34.2610, 108.9450),
+                Poi("羊肉泡馍馆", "restaurant", True, 2, ("local", "savory"), 34.2600, 108.9440),
+                Poi("秦镇凉皮", "noodle", True, 1, ("local", "street_food"), 34.2630, 108.9500),
+                Poi("biangbiang面馆", "noodle", True, 1, ("local", "savory"), 34.2590, 108.9480),
+                Poi("葫芦头泡馍", "restaurant", True, 2, ("local", "savory"), 34.2650, 108.9460),
+                Poi("甑糕摊", "dessert", True, 1, ("local", "dessert", "street_food"), 34.2670, 108.9430),
             ],
         )
     return ([], [])
@@ -2709,6 +2738,41 @@ def _merge_poi_lists(primary: list[Poi], secondary: list[Poi], limit: int = 24) 
     return merged
 
 
+def _cached_osm_pois(city: str, lat: float | None = None, lon: float | None = None) -> tuple[list[Poi], list[Poi]]:
+    """OSM POI 兜底：24h 进程缓存 + 失败自动降级到内置城市数据。"""
+    key = f"{city}|{lat or 0:.2f}|{lon or 0:.2f}"
+    now = _time.time()
+    hit = _POI_CACHE.get(key)
+    if hit and now - hit[0] < _POI_CACHE_TTL:
+        return hit[1], hit[2]
+    global _OSM_UNAVAILABLE_UNTIL
+    attr: list[Poi] = []
+    food: list[Poi] = []
+    if _time.time() >= _OSM_UNAVAILABLE_UNTIL:
+        if lat is not None and lon is not None:
+            try:
+                attr, food = fetch_nearby_pois(lat, lon, city)
+            except Exception:
+                attr, food = [], []
+        if len(attr) < 6 or len(food) < 6:
+            try:
+                city_attr, city_food = fetch_city_pois(city)
+                attr = _merge_poi_lists(attr, city_attr, limit=48)
+                food = _merge_poi_lists(food, city_food, limit=48)
+            except Exception:
+                pass
+        if not attr and not food:
+            # OSM 完全不可用：熔断一段时间，直接使用内置城市数据
+            _OSM_UNAVAILABLE_UNTIL = _time.time() + _OSM_COOLDOWN
+    if not attr and not food:
+        try:
+            attr, food = _city_fallback_pois(city)
+        except Exception:
+            attr, food = [], []
+    _POI_CACHE[key] = (now, attr, food)
+    return attr, food
+
+
 def _fetch_amap_pois(lat: float, lon: float) -> tuple[list[Poi], list[Poi]]:
     if not AMAP.enabled:
         return ([], [])
@@ -2725,20 +2789,37 @@ def _fetch_amap_pois(lat: float, lon: float) -> tuple[list[Poi], list[Poi]]:
         food_keywords = ("美食", "餐厅", "地方菜", "川菜", "火锅", "小吃", "面馆", "咖啡")
         radii = (1000, 3000, 5000, 8000, 15000, 30000, 50000)
 
-        for radius in radii:
+        def _fetch_batch(radius: int) -> tuple[list[dict], list[dict]]:
             page_limit = 3 if radius <= 5000 else (2 if radius <= 15000 else 1)
-            for keyword in attr_keywords:
-                for page in range(1, page_limit + 1):
-                    try:
-                        attr_raw.extend(AMAP.nearby_pois(lat, lon, keywords=keyword, radius=radius, offset=25, page=page))
-                    except Exception:
-                        continue
-            for keyword in food_keywords:
-                for page in range(1, min(2, page_limit) + 1):
-                    try:
-                        food_raw.extend(AMAP.nearby_pois(lat, lon, keywords=keyword, radius=radius, offset=25, page=page))
-                    except Exception:
-                        continue
+            tasks: list[tuple[str, int, int, bool]] = [
+                (keyword, radius, page, False)
+                for keyword in attr_keywords
+                for page in range(1, page_limit + 1)
+            ]
+            tasks += [
+                (keyword, radius, page, True)
+                for keyword in food_keywords
+                for page in range(1, min(2, page_limit) + 1)
+            ]
+
+            def _run(task: tuple[str, int, int, bool]) -> tuple[list[dict], bool]:
+                keyword, rad, pg, is_food = task
+                try:
+                    return AMAP.nearby_pois(lat, lon, keywords=keyword, radius=rad, offset=25, page=pg), is_food
+                except Exception:
+                    return [], is_food
+
+            results = list(_POI_POOL.map(_run, tasks))
+            attr_rows: list[dict] = []
+            food_rows: list[dict] = []
+            for rows, is_food in results:
+                (food_rows if is_food else attr_rows).extend(rows)
+            return attr_rows, food_rows
+
+        for radius in radii:
+            batch_attr, batch_food = _fetch_batch(radius)
+            attr_raw.extend(batch_attr)
+            food_raw.extend(batch_food)
 
             temp_items: list[dict] = []
             temp_seen: set[str] = set()
@@ -3099,13 +3180,9 @@ def build_plan(payload: dict, include_itinerary: bool = True) -> dict:
     if live_poi and cur_lat is not None and cur_lon is not None:
         live_attractions, live_foods = _fetch_amap_pois(cur_lat, cur_lon)
         if len(live_attractions) < 6 or len(live_foods) < 6:
-            search_attractions, search_foods = fetch_nearby_pois(cur_lat, cur_lon, city)
-        if city and (len(live_attractions) + len(search_attractions) < 6 or len(live_foods) + len(search_foods) < 6):
-            city_search_attractions, city_search_foods = fetch_city_pois(city)
-            search_attractions = _merge_poi_lists(search_attractions, city_search_attractions, limit=24)
-            search_foods = _merge_poi_lists(search_foods, city_search_foods, limit=24)
+            search_attractions, search_foods = _cached_osm_pois(city, cur_lat, cur_lon)
     elif live_poi:
-        search_attractions, search_foods = fetch_city_pois(city)
+        search_attractions, search_foods = _cached_osm_pois(city)
     else:
         search_attractions, search_foods = _city_fallback_pois(city)
 

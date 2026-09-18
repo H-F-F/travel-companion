@@ -1,7 +1,26 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+import asyncio
+import os
+import urllib.request
+from pathlib import Path
+
+# 服务进程内所有外部 API（LLM / 高德 / 天气 / 12306）一律直连，
+# 不受用户系统代理环境影响；否则失效的本地代理会把请求挂死。
+for _proxy_key in (
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "all_proxy",
+):
+    os.environ.pop(_proxy_key, None)
+os.environ["NO_PROXY"] = "*"
+os.environ["no_proxy"] = "*"
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
+from .agent import run_agent
 from .engine import (
     build_plan,
     build_plan_check,
@@ -14,7 +33,17 @@ from .engine import (
 )
 from .models import PlanRequest
 
-app = FastAPI(title="AI Travel Companion API", version="0.1.0")
+app = FastAPI(title="AI Travel Companion API", version="0.2.0")
+
+
+class ChatMessage(BaseModel):
+    role: str = Field(default="user", pattern="^(user|assistant)$")
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[ChatMessage] = Field(default_factory=list)
 
 
 @app.get("/health")
@@ -70,7 +99,7 @@ async def search_transport_hub_candidates(city: str = "", q: str = "", lat: floa
 async def generate_plan(req: PlanRequest) -> dict:
     try:
         payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
-        return build_plan(payload)
+        return await asyncio.to_thread(build_plan, payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -79,7 +108,7 @@ async def generate_plan(req: PlanRequest) -> dict:
 async def check_plan(req: PlanRequest) -> dict:
     try:
         payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
-        return build_plan_check(payload)
+        return await asyncio.to_thread(build_plan_check, payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -88,6 +117,31 @@ async def check_plan(req: PlanRequest) -> dict:
 async def preview_plan(req: PlanRequest) -> dict:
     try:
         payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
-        return build_preview(payload)
+        return await asyncio.to_thread(build_preview, payload)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/chat")
+async def chat(req: ChatRequest) -> dict:
+    """对话式规划入口：LLM Agent 编排工具，失败自动降级到规则引擎。"""
+    try:
+        history = [{"role": m.role, "content": m.content} for m in req.history]
+        result = await asyncio.to_thread(run_agent, req.message, history)
+        return {
+            "reply_text": result.reply_text,
+            "steps": [
+                {"tool": s.tool, "args": s.args, "summary": s.summary, "status": s.status, "seq": s.seq}
+                for s in result.steps
+            ],
+            "plan": result.plan,
+            "mode": result.mode,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# 前端静态文件：单服务跑全栈（API + 页面）
+_FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+if _FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIR, html=True), name="frontend")

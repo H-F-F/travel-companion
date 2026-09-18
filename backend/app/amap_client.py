@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
+import http.client
 import json
 import os
+import threading
 from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -23,12 +25,27 @@ def _load_local_env() -> None:
                 os.environ.setdefault(key, value)
 
 
+# 每线程一个 HTTPS 连接，避免高频 POI 查询反复 TLS 握手
+_conn_local: threading.local = threading.local()
+
+
+def _get_conn(timeout: float = 6.0) -> http.client.HTTPSConnection:
+    conn = getattr(_conn_local, "conn", None)
+    if conn is None:
+        conn = http.client.HTTPSConnection(AMapClient.BASE_HOST, timeout=timeout)
+        _conn_local.conn = conn
+    return conn
+
+
 class AMapClient:
     BASE = "https://restapi.amap.com"
+    BASE_HOST = "restapi.amap.com"
 
     def __init__(self, api_key: str | None = None) -> None:
         _load_local_env()
         self.api_key = api_key or os.getenv("AMAP_API_KEY", "").strip()
+        # key 被判定无效后快速失败，避免每次生成都白等一轮超时
+        self._key_invalid = False
 
     @property
     def enabled(self) -> bool:
@@ -37,15 +54,37 @@ class AMapClient:
     def _get_json(self, path: str, params: dict, timeout: float = 6.0) -> dict:
         if not self.enabled:
             raise RuntimeError("AMAP_API_KEY not set")
+        if self._key_invalid:
+            raise RuntimeError("AMAP_API_KEY 无效，已跳过高德请求")
         query = dict(params)
         query["key"] = self.api_key
-        url = f"{self.BASE}{path}?{urlencode(query)}"
-        req = Request(url, headers={"User-Agent": "ai-travel-companion/0.1"})
-        with urlopen(req, timeout=timeout) as resp:  # nosec B310
-            data = json.loads(resp.read().decode("utf-8"))
-        if str(data.get("status")) != "1":
-            raise RuntimeError(data.get("info") or "AMap API error")
-        return data
+        target = f"{path}?{urlencode(query)}"
+        for attempt in range(2):
+            try:
+                conn = _get_conn(timeout)
+                conn.request(
+                    "GET",
+                    target,
+                    headers={
+                        "User-Agent": "ai-travel-companion/0.1",
+                        "Host": self.BASE_HOST,
+                        "Accept": "application/json",
+                    },
+                )
+                resp = conn.getresponse()
+                data = json.loads(resp.read().decode("utf-8"))
+                if str(data.get("status")) != "1":
+                    info = str(data.get("info") or "AMap API error")
+                    if "INVALID_USER_KEY" in info or "USERKEY_PLAT_NOMATCH" in info or "INVALID_USER_SCODE" in info:
+                        self._key_invalid = True
+                    raise RuntimeError(info)
+                return data
+            except (http.client.HTTPException, OSError, ValueError) as exc:
+                # 连接被服务端关闭或异常时重建一次再试
+                _conn_local.conn = None
+                if attempt == 1:
+                    raise RuntimeError(f"AMap API request failed: {exc}") from exc
+        raise RuntimeError("AMap API request failed")
 
     def reverse_geocode(self, lat: float, lon: float) -> dict:
         data = self._get_json(

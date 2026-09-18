@@ -86,6 +86,12 @@ class MCP12306Client:
         self.timeout_sec = max(3.0, float(timeout_raw))
         self.node_binary = shutil.which("node") or shutil.which("node.exe")
         self.node_script = self._resolve_node_script()
+        # 熔断：连接失败后短时间内直接跳过，避免每次请求都空等超时
+        self._circuit_until = 0.0
+        self._circuit_cooldown = float(os.getenv("MCP_12306_CIRCUIT_SEC", "60").strip() or 60)
+        # 熔断：连接失败后短时间内直接跳过，避免每次请求都空等超时
+        self._circuit_until = 0.0
+        self._circuit_cooldown = float(os.getenv("MCP_12306_CIRCUIT_SEC", "60").strip() or 60)
 
     def _resolve_node_script(self) -> str:
         env_script = str(os.getenv("MCP_12306_NODE_SCRIPT", "") or "").strip()
@@ -129,6 +135,8 @@ class MCP12306Client:
     ) -> tuple[int, dict, dict[str, str]]:
         if not self.base_url:
             raise RuntimeError("MCP_12306_URL not set")
+        if time.time() < self._circuit_until:
+            raise RuntimeError("12306 MCP 服务不可用（熔断中，稍后自动恢复）")
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
         req = Request(self.base_url, data=body, headers=self._headers(session_id), method=method)
         try:
@@ -137,10 +145,15 @@ class MCP12306Client:
                 text = resp.read().decode("utf-8")
                 headers = dict(resp.headers.items())
         except HTTPError as exc:
+            self._circuit_until = time.time() + self._circuit_cooldown
             detail = exc.read().decode("utf-8", errors="ignore")
             raise RuntimeError(f"12306 MCP HTTP {exc.code}: {detail or exc.reason}") from exc
         except URLError as exc:
+            self._circuit_until = time.time() + self._circuit_cooldown
             raise RuntimeError(f"12306 MCP unavailable: {exc.reason}") from exc
+        except OSError as exc:
+            self._circuit_until = time.time() + self._circuit_cooldown
+            raise RuntimeError(f"12306 MCP unavailable: {exc}") from exc
 
         if status not in expect_status:
             raise RuntimeError(f"12306 MCP returned unexpected status {status}")
