@@ -44,6 +44,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = Field(default_factory=list)
+    confirm: dict | None = Field(default=None, description="确认卡参数：用户确认后直接生成行程")
 
 
 @app.get("/health")
@@ -124,10 +125,10 @@ async def preview_plan(req: PlanRequest) -> dict:
 
 @app.post("/api/v1/chat")
 async def chat(req: ChatRequest) -> dict:
-    """对话式规划入口：LLM Agent 编排工具，失败自动降级到规则引擎。"""
+    """对话式规划入口：LLM Agent 编排工具，支持确认卡（confirm）与校验重试，失败自动降级到规则引擎。"""
     try:
         history = [{"role": m.role, "content": m.content} for m in req.history]
-        result = await asyncio.to_thread(run_agent, req.message, history)
+        result = await asyncio.to_thread(run_agent, req.message, history, None, req.confirm)
         return {
             "reply_text": result.reply_text,
             "steps": [
@@ -136,6 +137,8 @@ async def chat(req: ChatRequest) -> dict:
             ],
             "plan": result.plan,
             "mode": result.mode,
+            "brief": result.brief,
+            "meta": result.meta,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

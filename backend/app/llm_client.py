@@ -63,6 +63,9 @@ class LLMClient:
             self.timeout = float(raw_timeout)
         except (TypeError, ValueError):
             self.timeout = 30.0
+        # 累计 token 用量（供 Agent 返回可观测元数据）
+        self.total_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        self.calls: int = 0
 
     @property
     def available(self) -> bool:
@@ -103,6 +106,13 @@ class LLMClient:
 
         try:
             data = resp.json()
+            usage = data.get("usage") or {}
+            self.calls += 1
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                try:
+                    self.total_usage[key] = self.total_usage.get(key, 0) + int(usage.get(key) or 0)
+                except (TypeError, ValueError):
+                    pass
             return data["choices"][0]["message"]
         except (KeyError, IndexError, ValueError) as exc:
             raise LLMError(f"LLM 响应解析失败: {exc}") from exc

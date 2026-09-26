@@ -2732,6 +2732,16 @@
 .chat-send{border:none;border-radius:10px;width:auto;padding:0 18px;background:linear-gradient(135deg,#0f84ff,#4a90e2);color:#fff;font-size:14px;font-weight:600;cursor:pointer;flex:0 0 auto;white-space:nowrap;}
 .chat-send:disabled{opacity:.55;cursor:not-allowed;}
 .chat-send:hover:not(:disabled){filter:brightness(1.06);}
+.brief-card{align-self:flex-start;width:100%;background:#fff;border:1px solid #bfe0ff;border-radius:12px;padding:12px 14px;font-size:13px;color:#11243b;line-height:1.7;box-shadow:0 2px 8px rgba(15,132,255,.10);}
+.brief-title{font-weight:700;color:#0f3d6e;margin-bottom:6px;}
+.brief-row{display:flex;gap:8px;padding:2px 0;}
+.brief-k{flex:0 0 60px;color:#7a8ba0;}
+.brief-v{color:#2c4458;}
+.brief-v.missing{color:#e5484d;}
+.brief-missing{font-size:12px;color:#b47a00;background:#fff7e6;border-radius:6px;padding:4px 8px;margin:6px 0;}
+.brief-confirm{width:100%;border:none;border-radius:10px;padding:9px 0;background:linear-gradient(135deg,#0f84ff,#4a90e2);color:#fff;font-size:14px;font-weight:600;cursor:pointer;margin-top:8px;}
+.brief-confirm:hover{filter:brightness(1.06);}
+.meta-bar{align-self:flex-start;width:100%;font-size:11px;color:#8ba1b8;padding:0 4px;margin-top:-4px;}
 </style>
   <style>
     /* ===== 顶部导航与全局排版重构（overlay，功能零改动）===== */
@@ -6915,6 +6925,91 @@
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    function addBriefCard(brief) {
+      if (!brief || !brief.city) return;
+      const card = document.createElement("div");
+      card.className = "brief-card";
+      let html = '<div class="brief-title">已确认出行信息</div>';
+      const rows = [
+        ["目的地", brief.city],
+        ["出发日期", brief.travel_date || "待确认（默认明天）"],
+        ["天数", brief.days ? brief.days + " 天" : "待确认（默认 3 天）"],
+        ["预算", { economy: "经济", standard: "标准", premium: "舒适" }[brief.budget_level] || brief.budget_level || "标准"],
+      ];
+      rows.forEach(function (pair) {
+        const missing = pair[1].indexOf("待确认") >= 0;
+        html += '<div class="brief-row"><span class="brief-k">' + pair[0] + "</span><span class='brief-v" + (missing ? " missing" : "") + "'>" + escapeHtml(pair[1]) + "</span></div>";
+      });
+      if (brief.attraction_styles && brief.attraction_styles.length) {
+        html += '<div class="brief-row"><span class="brief-k">偏好</span><span class="brief-v">' + brief.attraction_styles.map(function (s) { return { culture: "人文", nature: "自然", landmark: "地标", indoor: "室内" }[s] || s; }).join("、") + "</span></div>";
+      }
+      if (brief.missing && brief.missing.length) {
+        html += '<div class="brief-missing">待确认：' + brief.missing.join("、") + "，点确认将用默认值补齐</div>";
+      }
+      html += '<button type="button" class="brief-confirm">确认并生成行程</button>';
+      card.innerHTML = html;
+      card.querySelector(".brief-confirm").addEventListener("click", function () { confirmSend(brief); });
+      messagesEl.appendChild(card);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function addMeta(meta) {
+      if (!meta) return;
+      const parts = [];
+      if (meta.model) parts.push("模型 " + meta.model);
+      const strat = { llm: "LLM 编排", llm_retry: "LLM 校验重试", engine: "规则引擎" }[meta.strategy] || meta.strategy;
+      if (strat) parts.push(strat);
+      if (meta.attempts) parts.push("尝试 " + meta.attempts + " 次");
+      if (typeof meta.score === "number") parts.push("方案评分 " + meta.score);
+      if (meta.token_usage && meta.token_usage.total_tokens) parts.push("token " + meta.token_usage.total_tokens);
+      if (meta.latency_ms) parts.push((meta.latency_ms / 1000).toFixed(1) + "s");
+      if (!parts.length) return;
+      const div = document.createElement("div");
+      div.className = "meta-bar";
+      div.textContent = parts.join(" · ");
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function confirmSend(brief) {
+      if (busy) return;
+      busy = true;
+      sendBtn.disabled = true;
+      const typing = addTyping();
+      fetch("/api/v1/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "确认以上信息，开始生成", history: history.slice(), confirm: brief }),
+      })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          typing.remove();
+          const steps = data.steps || [];
+          if (steps.length) {
+            addSteps(steps, function () {
+              addMsg("assistant", data.reply_text || "");
+            });
+          } else {
+            addMsg("assistant", data.reply_text || "");
+          }
+          if (data.plan) {
+            addPlanCard(data.plan);
+            window.__chatPlanReady = true;
+          }
+          if (data.meta) addMeta(data.meta);
+          history.push({ role: "assistant", content: data.reply_text || "" });
+        })
+        .catch(function (err) {
+          typing.remove();
+          addMsg("assistant", "请求失败：" + err.message + "，请稍后重试。");
+        })
+        .finally(function () {
+          busy = false;
+          sendBtn.disabled = false;
+          input.value = "";
+        });
+    }
+
     function sendMessage() {
       const text = input.value.trim();
       if (!text || busy) return;
@@ -6939,10 +7034,14 @@
           } else {
             addMsg("assistant", data.reply_text || "");
           }
+          if (data.brief && !data.plan) {
+            addBriefCard(data.brief);
+          }
           if (data.plan) {
             addPlanCard(data.plan);
             window.__chatPlanReady = true;
           }
+          if (data.meta) addMeta(data.meta);
           history.push({ role: "assistant", content: data.reply_text || "" });
         })
         .catch(function (err) {
