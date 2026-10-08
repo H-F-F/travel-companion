@@ -6957,6 +6957,28 @@ body, body *{font-family:inherit;}
       return div;
     }
 
+    // 打字机渲染：AI 回复逐字出现（流式视觉，中文按字符切分）
+    function addMsgTyped(role, text, done) {
+      const div = addMsg(role, "");
+      const full = String(text || "");
+      if (!full) {
+        if (done) done();
+        return;
+      }
+      let i = 0;
+      (function tick() {
+        const chunk = Math.min(i + 3, full.length);
+        div.textContent = full.slice(0, chunk);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        i = chunk;
+        if (i < full.length) {
+          setTimeout(tick, 22);
+        } else if (done) {
+          done();
+        }
+      })();
+    }
+
     function addTyping() {
       const div = document.createElement("div");
       div.className = "msg assistant typing";
@@ -7114,10 +7136,10 @@ body, body *{font-family:inherit;}
           const steps = data.steps || [];
           if (steps.length) {
             addSteps(steps, function () {
-              addMsg("assistant", data.reply_text || "");
+              addMsgTyped("assistant", data.reply_text || "");
             });
           } else {
-            addMsg("assistant", data.reply_text || "");
+            addMsgTyped("assistant", data.reply_text || "");
           }
           if (data.plan) {
             addPlanCard(data.plan);
@@ -7156,10 +7178,10 @@ body, body *{font-family:inherit;}
           const steps = data.steps || [];
           if (steps.length) {
             addSteps(steps, function () {
-              addMsg("assistant", data.reply_text || "");
+              addMsgTyped("assistant", data.reply_text || "");
             });
           } else {
-            addMsg("assistant", data.reply_text || "");
+            addMsgTyped("assistant", data.reply_text || "");
           }
           if (data.brief && !data.plan) {
             addBriefCard(data.brief);
