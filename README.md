@@ -9,6 +9,7 @@
 3. **多源数据整合**：高德地图（地理编码 / POI / 酒店）、Open-Meteo（天气）、OSM Overpass（POI 兜底）、12306 MCP（车站 / 直达 / 中转票务）。
 4. **可执行行程**：景点 / 美食「想去 / 想吃 / 不感兴趣」二次筛选，结合天气、预算、距离、口味偏好、室内外属性、车次到达时间与酒店位置，生成多日 itinerary（含每日动线、天气提示与预算建议）。
 5. **可靠性工程**：多数据源降级链、外部服务熔断、POI 进程级缓存、HTTPS 连接复用与并发抓取、异步线程池隔离，单次行程生成耗时从分钟级降至秒级，且不阻塞其他请求。
+6. **历史行程与导出**：生成的行程自动持久化到 SQLite（「我的行程」随时回看 / 复用 / 删除）；每次 AI 调用落盘 AI Trace 日志（模式 / 策略 / 质量分 / Token / 耗时可回溯）；一键导出为自包含 HTML 旅行攻略（可打印 / 转 PDF）。
 
 ## 技术栈
 
@@ -86,6 +87,10 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 | `GET` | `/api/v1/search-poi` | POI 搜索 `?q=&kind=attraction\|food` |
 | `GET` | `/api/v1/transport/stations` | 车站搜索 |
 | `GET` | `/api/v1/transport/hubs` | 目的地枢纽 / 车站候选 |
+| `GET` | `/api/v1/plans` | 历史行程列表 |
+| `GET` | `/api/v1/plans/{id}` | 历史行程详情（含生成参数） |
+| `DELETE` | `/api/v1/plans/{id}` | 删除历史行程 |
+| `GET` | `/api/v1/plans/{id}/export` | 导出 HTML 旅行攻略（自包含，可打印 / 转 PDF） |
 
 ## LLM Agent 架构
 
@@ -115,7 +120,7 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 backend/
   app/
     main.py                 # FastAPI 入口：API 路由 + 静态前端挂载
-    agent.py                # LLM Agent 编排（5 个 function-calling 工具 + 降级）
+    agent.py                # LLM Agent 编排（5 个 function-calling 工具 + 降级 + AI Trace）
     llm_client.py           # OpenAI 兼容 LLM 客户端
     engine.py               # 规则引擎：行程生成 / 评分 / 降级链
     amap_client.py          # 高德地图客户端（连接复用 + Key 熔断）
@@ -125,8 +130,14 @@ backend/
     station_catalog.py      # 内置车站目录
     recommendation.py       # 评分 / 推荐模型
     models.py               # Pydantic 请求模型
+    storage.py              # 行程持久化（SQLite：保存 / 列表 / 详情 / 删除）
+    export.py               # 行程导出：自包含 HTML 旅行攻略渲染
 frontend/
-  index.html                # 单页前端（导航 + 向导 + 结果页 + 对话面板）
+  index.html                # 单页前端（导航 + 向导 + 结果页 + 对话面板 + 我的行程）
+logs/
+  ai-trace.log              # AI Trace 日志（每次对话落盘一条 JSONL，运行时生成）
+data/
+  plans.db                  # 行程持久化数据库（运行时生成，不入库）
 ```
 
 ## 项目文档
@@ -136,5 +147,6 @@ frontend/
 
 ## 当前状态
 
+- v0.3.0：新增行程持久化（SQLite）、AI Trace 日志、HTML 攻略导出与「我的行程」面板。
 - v0.2.0：LLM Agent 对话式规划、分步引导式前端（顶部导航 + 四步向导）、多源数据降级与熔断、生成性能优化（分钟级 → 秒级）。
 - 建议下一步：目标日期未开售的票务预测策略、天气突发重规划、外部数据缓存持久化与监控告警。

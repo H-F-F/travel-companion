@@ -4,9 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>智能旅行管家</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232F6FED'/%3E%3Cpath d='M32 13c-8.2 0-15 6.5-15 14.5 0 10.9 15 23.5 15 23.5s15-12.6 15-23.5C47 19.5 40.2 13 32 13z' fill='white'/%3E%3Ccircle cx='32' cy='28' r='5.5' fill='%232F6FED'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Outfit:wght@400;600;800&family=Noto+Sans+SC:wght@400;500;700&display=swap">
   <style>
     :root { --bg-1:#fff9ec; --bg-2:#e8f6ff; --ink:#11243b; --sub:#4b647f; --card:#ffffffcc; --line:#d2e1ef; --accent:#0084ff; --ok:#0f9960; --weather-1:#0f2945; --weather-2:#146c74; --weather-soft:rgba(255,255,255,.12); --weather-line:rgba(255,255,255,.16); --wrap-max:1280px; --wrap-width:min(var(--wrap-max),94vw); --weather-dock-w:96px; --weather-panel-gap:12px; --weather-panel-w:min(360px,calc(100vw - 156px)); --weather-top:clamp(118px,16vh,180px); --weather-edge-gap:max(4px, env(safe-area-inset-right)); }
     * { box-sizing: border-box; }
@@ -2817,13 +2816,139 @@
       body { padding-top:56px; }
     }
   </style>
-</head>
+
+<style>
+/* ===== 视觉重做 v3：简洁 · 克制 · 对话优先（overlay，功能零改动） ===== */
+:root{
+  --bg:#f6f5f2; --card:#ffffff; --ink:#1c2430; --ink2:#5d6675; --ink3:#8a93a2;
+  --line:#e7e5e0; --brand:#2f6fed; --brand2:#4a8cff; --teal:#0ea5a4;
+  --ok:#34a853; --warn:#f5a623; --err:#e5484d; --r:16px; --r-sm:10px;
+  --shadow:0 1px 2px rgba(20,30,45,.04),0 6px 20px rgba(20,30,45,.05);
+}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;}
+
+/* ---------- 顶部导航 ---------- */
+.app-nav{height:60px;background:rgba(255,255,255,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);}
+.app-nav .nav-inner,.app-nav nav,.app-nav .nav-links{height:100%;}
+.nav-link{color:var(--ink2);font-size:14px;font-weight:500;padding:6px 14px;border-radius:999px;}
+.nav-link:hover{background:#eef1f8;color:var(--brand);}
+.nav-link.active{background:var(--brand);color:#fff;}
+.nav-status{color:var(--ink3);font-size:12px;}
+
+/* ---------- 对话悬浮钮与面板 ---------- */
+.chat-fab{position:fixed;right:24px;bottom:24px;z-index:1200;background:var(--brand);color:#fff;border:none;border-radius:999px;padding:12px 20px;font-size:14px;font-weight:600;box-shadow:0 8px 24px rgba(47,111,237,.35);cursor:pointer;display:flex;align-items:center;gap:8px;}
+.chat-fab:hover{background:var(--brand2);}
+.chat-panel{border:none;border-radius:20px;box-shadow:0 24px 64px rgba(20,30,45,.18);background:#fff;}
+.chat-header{background:linear-gradient(135deg,var(--brand),#6aa5ff);}
+.chat-messages{background:#f8f8f6;}
+.msg.assistant{background:#fff;border:1px solid var(--line);}
+.msg.user{background:var(--brand);}
+.step-card{border-left-color:var(--brand);}
+.plan-card{background:#fff;border:1px solid #dcebff;}
+.brief-card{border-color:#cfe0ff;}
+
+/* ---------- Hero ---------- */
+.hero{padding:36px 0 8px;}
+.hero-kicker{font-size:12px;letter-spacing:.12em;color:var(--brand);font-weight:600;}
+.hero h1{font-size:30px;line-height:1.25;color:var(--ink);}
+.hero p,.journey-copy{color:var(--ink2);}
+.hero-start-btn,.hero-actions button:not(.ghost-btn),#poiSearchBtn,#regenerateSelection,.wizard-footer #wizardNextBtn,#go{background:var(--brand);color:#fff;border:none;border-radius:var(--r-sm);padding:10px 22px;font-size:14px;font-weight:600;cursor:pointer;}
+.hero-start-btn:hover,.hero-actions button:not(.ghost-btn):hover{background:var(--brand2);}
+.ghost-btn{background:#fff;border:1px solid var(--line);color:var(--ink2);border-radius:var(--r-sm);padding:8px 14px;font-size:13px;cursor:pointer;}
+.ghost-btn:hover{border-color:var(--brand);color:var(--brand);}
+
+/* ---------- 卡片与表单 ---------- */
+.card,.planner-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);}
+.field-card{border:none;background:#fafaf8;border:1px solid var(--line);border-radius:12px;padding:14px 16px;}
+.field-card label,.field-card > label{font-size:12px;color:var(--ink3);font-weight:600;margin-bottom:6px;display:block;}
+.field-card input,.field-card select,input[type=date],select,.state-select{border:1px solid #e2e0db;border-radius:10px;padding:10px 12px;font-size:14px;background:#fff;color:var(--ink);width:100%;box-sizing:border-box;}
+.field-card input:focus,.field-card select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(47,111,237,.12);}
+
+/* ---------- 向导 ---------- */
+.wizard-intro .hero-kicker{color:var(--teal);}
+.wizard-progress-track{background:#ecebe6;border-radius:999px;height:6px;}
+.wizard-progress-track span{background:linear-gradient(90deg,var(--brand),var(--teal));border-radius:999px;}
+.wizard-step-pill{background:#f2f1ed;border-radius:999px;padding:6px 14px;color:var(--ink3);font-size:12px;}
+.wizard-step-pill.current{background:#e8f0ff;color:var(--brand);font-weight:600;}
+.wizard-step-pill.current b{color:var(--brand);}
+.step-badge{background:#e8f0ff;color:var(--brand);border-radius:8px;font-size:12px;font-weight:700;padding:4px 10px;}
+.step-title{font-size:18px;color:var(--ink);}
+.step-desc{color:var(--ink2);font-size:13px;}
+.subtle-box{background:#fafaf8;border:1px dashed #d8d6cf;border-radius:12px;padding:12px 14px;color:var(--ink2);font-size:13px;}
+.search-panel{border-color:var(--line);}
+.list .item,.search-panel .item{border:1px solid var(--line);border-radius:12px;background:#fff;}
+.theme-tag{background:#eef1f8;color:var(--brand);border-radius:999px;padding:2px 10px;font-size:12px;}
+.switch-line input{accent-color:var(--brand);}
+
+/* ---------- 结果页 ---------- */
+.result-tab-btn{background:#fff;border:1px solid var(--line);color:var(--ink2);border-radius:999px;padding:7px 18px;font-size:13px;cursor:pointer;}
+.result-tab-btn.active{background:var(--brand);border-color:var(--brand);color:#fff;}
+.summary-tile{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 14px;}
+.summary-tile b{font-size:16px;color:var(--ink);}
+.summary-tile span{font-size:11px;color:var(--ink3);}
+.signal-pill{background:#fafaf8;border:1px solid var(--line);border-radius:14px;padding:14px;}
+.signal-meter{background:#e8e7e2;height:6px;border-radius:999px;}
+.signal-meter span{background:linear-gradient(90deg,var(--brand),var(--teal));border-radius:999px;}
+.filter-tabs button{background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--ink2);cursor:pointer;}
+.filter-tabs button.active{background:var(--brand);color:#fff;border-color:var(--brand);}
+.pager-btn{background:#fff;border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;}
+.day-preview-scroll .day-preview-card{background:#fff;border:1px solid var(--line);border-radius:14px;}
+.route-day-tabs button{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:13px;color:var(--ink2);cursor:pointer;}
+.route-day-tabs button.active{background:var(--brand);color:#fff;}
+.route-days .day-block{border-left:3px solid var(--brand);background:#fff;border-radius:12px;padding:14px 16px;}
+.hotel-grid .hotel-card{background:#fff;border:1px solid var(--line);border-radius:14px;}
+.warning-list .warning-item{background:#fff7e6;border:1px solid #ffe3ad;border-radius:10px;}
+
+/* ---------- 弹窗 ---------- */
+.notice-dialog{background:#fff;border-radius:18px;box-shadow:0 24px 64px rgba(20,30,45,.2);}
+
+/* ---------- 通用 ---------- */
+button{cursor:pointer;}
+::-webkit-scrollbar{width:10px;height:10px;}
+::-webkit-scrollbar-thumb{background:#d5d3cd;border-radius:999px;}
+::-webkit-scrollbar-thumb:hover{background:#c0bdb5;}
+@media (max-width:760px){.app-nav{height:56px;}}
+</style>
+
+<style>
+/* ===== v3 补丁：字体统一 + 侧栏紧凑 + 细节 ===== */
+body, body *{font-family:inherit;}
+.planner-shell{grid-template-columns:minmax(0,1fr) 280px;gap:20px;}
+.planner-aside{position:sticky;top:76px;display:grid;gap:12px;align-content:start;}
+.planner-aside .aside-card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);}
+.planner-aside .aside-card h3{margin:0 0 10px;font-size:14px;color:var(--ink3);}
+.planner-mini-card{background:#fafaf8;border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
+.planner-mini-card span{font-size:11px;color:var(--ink3);}
+.planner-mini-card b{font-size:14px;color:var(--ink);}
+.planner-status-item{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:12px;color:var(--ink2);}
+.planner-status-item b{font-size:12px;color:var(--ink);font-weight:600;}
+.mini-ghost-btn{padding:6px 10px;font-size:12px;border-radius:8px;}
+@media (max-width:1080px){.planner-shell{grid-template-columns:1fr;}.planner-aside{position:static;order:2;}}
+.wizard-intro{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;}
+.hero{max-width:var(--wrap-max,1280px);margin:0 auto;width:min(var(--wrap-width,1280px),94vw);}
+.planner-shell,.results-shell{max-width:var(--wrap-max,1280px);margin:0 auto;width:min(var(--wrap-width,1280px),94vw);}
+</style>
+
+<style>
+/* ===== v4：对话优先首页 ===== */
+/* wizard 默认可见 */
+.hero-chat{display:flex;gap:10px;margin:18px 0 14px;max-width:560px;}
+.hero-chat input{flex:1;border:1px solid #e2e0db;border-radius:14px;padding:14px 18px;font-size:15px;background:#fff;box-shadow:var(--shadow);}
+.hero-chat input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(47,111,237,.14);}
+.hero-chat button{border:none;background:var(--brand);color:#fff;border-radius:14px;padding:0 26px;font-size:15px;font-weight:600;cursor:pointer;}
+.hero-chat button:hover{background:var(--brand2);}
+.hero-chip-btn{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 14px;font-size:12px;color:var(--ink2);cursor:pointer;}
+.hero-chip-btn:hover{border-color:var(--brand);color:var(--brand);}
+.hero-actions{margin-top:6px;}
+@media (max-width:760px){.hero-chat{flex-direction:column;}.hero-chat button{padding:12px 0;}}
+</style>
+
 <body>
   
   <!-- ===== 顶部导航（重构后新增）===== -->
   <header class="app-nav" id="appNav">
     <div class="nav-inner">
-      <a class="nav-brand" href="#" onclick="return false;">
+      <a class="nav-brand" href="#form" onclick="showScreen('form');return false;">
         <span class="nav-logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17h18"/><path d="M5 17 9 6h6l4 11"/><path d="M12 6v11"/><path d="M6 17h12"/></svg></span>
         <span class="nav-brand-name">智能旅行管家</span>
       </a>
@@ -2857,50 +2982,46 @@
       <section class="hero hero-landing">
         <div class="hero-grid">
           <div class="hero-copy">
-            <div class="hero-kicker">第一页 · 参数设置</div>
-            <h1>先定想去的地方，再把路线串顺。</h1>
-            <p>从目的地、到达时间和兴趣点开始，系统会先筛选景点与美食候选，再结合酒店和票务，把每天的节奏排成真正可执行的旅行路线。</p>
+            <div class="hero-kicker">智能旅行管家</div>
+            <h1>几步填完，直接出发。</h1>
+            <p>填好目的地、日期和预算，AI 会为你规划景点、美食与每日路线。也可以点右下角「对话规划」，用聊天直接生成。</p>
             <div class="hero-actions">
               <button id="heroStartBtn" type="button" class="hero-start-btn">开始规划</button>
             </div>
-            <div class="hero-info-strip">
-              <span class="hero-chip">天气联动</span>
-              <span class="hero-chip">到达时间同步</span>
-              <span class="hero-chip">酒店选中后重算</span>
-            </div>
           </div>
           <div class="hero-visual" aria-hidden="true">
-            <span class="hero-visual-note">旅程节奏</span>
+            <span class="hero-visual-note">AI 生成</span>
             <svg viewBox="0 0 260 120" fill="none">
-              <path d="M12 80c38-38 71-57 100-57 18 0 34 6 48 17 17 15 36 24 58 26" stroke="#4A90E2" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M24 93h52l16-18 34 8 22-28 28 10 24-22 18 4" stroke="#FF7A00" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity=".88"/>
-              <circle cx="24" cy="93" r="10" fill="#ffffff" stroke="#183B57" stroke-width="4"/>
-              <circle cx="126" cy="83" r="10" fill="#ffffff" stroke="#52C41A" stroke-width="4"/>
-              <rect x="206" y="32" width="18" height="18" rx="5" fill="#4A90E2" stroke="#ffffff" stroke-width="4"/>
-              <path d="M212 24l10-10" stroke="#183B57" stroke-width="4" stroke-linecap="round"/>
+              <path d="M12 80c38-38 71-57 100-57 18 0 34 6 48 17 17 15 36 24 58 26" stroke="#2F6FED" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M24 93h52l16-18 34 8 22-28 28 10 24-22 18 4" stroke="#0EA5A4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity=".88"/>
+              <circle cx="24" cy="93" r="10" fill="#ffffff" stroke="#2F6FED" stroke-width="4"/>
+              <circle cx="126" cy="83" r="10" fill="#ffffff" stroke="#0EA5A4" stroke-width="4"/>
+              <rect x="206" y="32" width="18" height="18" rx="5" fill="#2F6FED" stroke="#ffffff" stroke-width="4"/>
             </svg>
           </div>
         </div>
+      </section>
+
       </section>
 
       <section id="plannerWizard" class="planner-shell planner-shell-wizard">
         <section class="card planner-card wizard-card">
           <section class="wizard-intro">
             <div>
-              <div class="hero-kicker">四步向导 · 一步一揭晓</div>
-              <h3 class="journey-title">欢迎使用智能旅行管家，请按步骤开始规划你的旅程。</h3>
-              <p class="journey-copy">每次点击“下一步”，只需要完成当前这一步。先确认出发信息，再补充交通方式和偏好，最后生成完整行程结果。</p>
+              <div class="hero-kicker">四步向导</div>
+              <h3 class="journey-title">四步完成一次旅行规划。</h3>
+              <p class="journey-copy">每步只做一件事：基本信息 → 兴趣点 → 酒店 → 确认生成。</p>
             </div>
             <div class="wizard-progress-meta">
               <span id="wizardCurrentStepLabel">STEP 1 / 4</span>
-              <b id="wizardCurrentStepTitle">出发信息</b>
+              <b id="wizardCurrentStepTitle">基本信息</b>
             </div>
           </section>
 
           <section class="wizard-progress-shell">
             <div class="wizard-progress-track"><span id="wizardProgressFill"></span></div>
             <div class="wizard-step-pills">
-              <div class="wizard-step-pill current" data-form-step-marker="1"><span>STEP 1</span><b>出发与车次</b></div>
+              <div class="wizard-step-pill current" data-form-step-marker="1"><span>STEP 1</span><b>基本信息</b></div>
               <div class="wizard-step-pill" data-form-step-marker="2"><span>STEP 2</span><b>兴趣点</b></div>
               <div class="wizard-step-pill" data-form-step-marker="3"><span>STEP 3</span><b>酒店选择</b></div>
               <div class="wizard-step-pill" data-form-step-marker="4"><span>STEP 4</span><b>最终确认</b></div>
@@ -2911,105 +3032,111 @@
             <div class="step-header">
               <div class="step-badge">STEP 1</div>
               <div>
-                <h3 class="step-title">出发信息与车次预览</h3>
-                <p class="step-desc">在这里一次性锁定目的地、日期、预算和出发方式。车票和候选项会先被缓存下来，后面的兴趣点和酒店选择都不再重复请求。</p>
+                <h3 class="step-title">基本信息</h3>
+                <p class="step-desc">确定目的地、日期与预算。城市内行程不依赖出发地；如需查往返火车票，可在「更多选项」补充出发城市与车站。</p>
               </div>
             </div>
             <div class="step-grid">
               <div class="field-card">
-                <label for="city">目的地或地址</label>
-                <input id="city" placeholder="定位中，或输入如：汉中 / 上海市徐汇区" />
+                <label for="city">目的地</label>
+                <input id="city" placeholder="城市或地址，如：西安 / 上海市徐汇区" />
               </div>
               <div class="field-card">
                 <label for="date">出行日期</label>
                 <input id="date" type="date" />
               </div>
               <div class="field-card">
-                <label for="days">计划天数</label>
+                <label for="days">天数</label>
                 <select id="days"><option value="1">1 天</option><option value="2">2 天</option><option value="3" selected>3 天</option><option value="4">4 天</option><option value="5">5 天</option><option value="6">6 天</option><option value="7">7 天</option></select>
               </div>
               <div class="field-card">
-                <label for="budget">出行预算</label>
+                <label for="budget">预算</label>
                 <select id="budget"><option value="economy">经济</option><option value="standard" selected>标准</option><option value="premium">高端</option></select>
               </div>
               <div class="field-card full">
-                <div class="inline-helper-row">
-                  <button id="pickAddressBtn" type="button" class="ghost-btn compact-btn">选择地址</button>
-                  <div class="inline-helper-text">定位不准时，可用地址搜索覆盖当前位置，让地图和天气都更准确。</div>
-                </div>
-                <details id="addressPicker" class="address-picker">
-                  <summary>地址搜索与选择（省 / 市 / 县）</summary>
-                  <div class="address-picker-shell">
-                    <div class="address-toolbar">
-                      <div>
-                        <label for="addressQuery">地址关键词</label>
-                        <input id="addressQuery" placeholder="例如：上海 徐汇区、广州 天河区" />
-                      </div>
-                      <div>
-                        <button id="searchAddressBtn" type="button">搜索地址</button>
-                      </div>
+                <details id="advancedOptions" class="advanced-options">
+                  <summary>更多选项：出发车次 · 地址校正 · 规划方式</summary>
+                  <div class="advanced-options-body">
+                    <div class="field-card">
+                      <label for="planningMode">规划方式</label>
+                      <select id="planningMode">
+                        <option value="auto" selected>自动生成路线</option>
+                        <option value="candidate">先看候选项再微调</option>
+                      </select>
                     </div>
-                    <div id="addressResults" class="address-results"></div>
-                    <div class="address-actions"><button id="applyAddressBtn" type="button" class="ghost-btn">应用所选地址</button></div>
-                  </div>
-                </details>
-              </div>
-              <div class="field-card">
-                <label for="planningMode">规划方式</label>
-                <select id="planningMode">
-                  <option value="auto" selected>自动生成路线</option>
-                  <option value="candidate">先看候选项再微调</option>
-                </select>
-              </div>
-              <div class="field-card">
-                <label for="bookingDate">预定日期（可选）</label>
-                <input id="bookingDate" type="date" />
-              </div>
-              <div class="field-card">
-                <label for="originCity">出发城市（系统填充）</label>
-                <input id="originCity" class="readonly-input" placeholder="选择车站后自动填充" readonly />
-              </div>
-              <div class="field-card">
-                <label for="originStation">出发车站（系统填充）</label>
-                <input id="originStation" class="readonly-input" placeholder="选择车站后自动填充" readonly />
-              </div>
-              <div class="field-card full">
-                <div class="station-search-shell">
-                  <div class="station-search-field">
-                    <label for="stationSearchKeyword">搜索车站</label>
-                    <input id="stationSearchKeyword" placeholder="输入城市名、站名、拼音或简拼，例如：西安 / 上海虹桥 / xab / shhq" />
-                  </div>
-                  <div class="station-search-actions">
-                    <button id="searchOriginStationBtn" type="button" class="ghost-btn">搜索 12306 出发站</button>
-                    <button id="applyOriginStationBtn" type="button" class="ghost-btn">应用所选车站</button>
-                    <button id="refreshPreviewBtn" type="button" class="ghost-btn">更新车票与候选项</button>
-                  </div>
-                </div>
-                <div id="stationSearchStatus" class="station-search-status">输入关键词后可实时筛选下方车站列表，支持中文、拼音和简拼。</div>
-                <div id="stationResults" class="station-results hidden"></div>
-                <div id="destinationHubSummary" class="subtle-box" style="margin-top:12px;">等待目的地确认后自动检索附近火车站/高铁站。</div>
-                <div id="destinationHubResults" class="station-results destination-hub-results"></div>
-                <div class="subtle-box">系统会先缓存 12306 车票和景点/美食候选；酒店推荐放在后续步骤中单独展示和选择。</div>
-              </div>
-              <div class="field-card full">
+                    <div class="field-card">
+                      <label for="bookingDate">预定日期（可选）</label>
+                      <input id="bookingDate" type="date" />
+                    </div>
+                    <div class="field-card">
+                      <label for="originCity">出发城市</label>
+                      <input id="originCity" class="readonly-input" placeholder="选择车站后自动填充" readonly />
+                    </div>
+                    <div class="field-card">
+                      <label for="originStation">出发车站</label>
+                      <input id="originStation" class="readonly-input" placeholder="选择车站后自动填充" readonly />
+                    </div>
+                    <div class="field-card full">
+                      <div class="station-search-shell">
+                        <div class="station-search-field">
+                          <label for="stationSearchKeyword">搜索车站</label>
+                          <input id="stationSearchKeyword" placeholder="城市名 / 站名 / 拼音 / 简拼，如：西安、上海虹桥、xab" />
+                        </div>
+                        <div class="station-search-actions">
+                          <button id="searchOriginStationBtn" type="button" class="ghost-btn">搜索 12306 出发站</button>
+                          <button id="applyOriginStationBtn" type="button" class="ghost-btn">应用所选车站</button>
+                          <button id="refreshPreviewBtn" type="button" class="ghost-btn">更新车票与候选项</button>
+                        </div>
+                      </div>
+                      <div id="stationSearchStatus" class="station-search-status">输入关键词实时筛选车站。</div>
+                      <div id="stationResults" class="station-results hidden"></div>
+                      <div id="destinationHubSummary" class="subtle-box" style="margin-top:12px;">等待目的地确认后自动检索附近车站。</div>
+                      <div id="destinationHubResults" class="station-results destination-hub-results"></div>
+                    </div>
+                    <div class="field-card full">
+                      <div class="inline-helper-row">
+                        <button id="pickAddressBtn" type="button" class="ghost-btn compact-btn">选择地址</button>
+                        <div class="inline-helper-text">定位不准时，可手动搜索地址覆盖。</div>
+                      </div>
+                      <details id="addressPicker" class="address-picker">
+                        <summary>地址搜索与选择（省 / 市 / 县）</summary>
+                        <div class="address-picker-shell">
+                          <div class="address-toolbar">
+                            <div>
+                              <label for="addressQuery">地址关键词</label>
+                              <input id="addressQuery" placeholder="例如：上海 徐汇区、广州 天河区" />
+                            </div>
+                            <div>
+                              <button id="searchAddressBtn" type="button">搜索地址</button>
+                            </div>
+                          </div>
+                          <div id="addressResults" class="address-results"></div>
+                          <div class="address-actions"><button id="applyAddressBtn" type="button" class="ghost-btn">应用所选地址</button></div>
+                        </div>
+                      </details>
+                    
+<div class="field-card full">
                 <div class="wizard-preview-head">
                   <div>
-                    <span class="wizard-inline-label">车票与候选项缓存</span>
-                    <div class="wizard-inline-note">完成这一步后，第二步和第三步只做本地选择，不再重复请求接口。</div>
+                    <span class="wizard-inline-label">车票与候选项</span>
                   </div>
                 </div>
                 <div id="wizardTransportSummary" class="subtle-box">等待查询车票与候选项。</div>
                 <div id="wizardTransportOptions" class="search-panel" style="margin-top:12px;"></div>
+</div>
+                  </div>
+                </details>
               </div>
+</div>
             </div>
           </section>
 
-          <section class="wizard-step-panel" data-form-step-panel="2">
+<section class="wizard-step-panel" data-form-step-panel="2">
             <div class="step-header">
               <div class="step-badge">STEP 2</div>
               <div>
                 <h3 class="step-title">兴趣点选择</h3>
-                <p class="step-desc">先从候选景点和美食里挑你真正想去的点。这里的选择会先缓存在前端，最终只在最后一步统一生成路线。</p>
+                <p class="step-desc">从候选里挑你想去的景点和想吃的美食。</p>
               </div>
             </div>
             <div class="step-grid">
@@ -3017,7 +3144,7 @@
                 <div class="wizard-preview-head">
                   <div>
                     <span class="wizard-inline-label">兴趣点候选</span>
-                    <div id="wizardInterestHint" class="wizard-inline-note">车票和候选项会在第一步缓存。你现在只需要标记想去和想吃的内容。</div>
+                    <div id="wizardInterestHint" class="wizard-inline-note">只需标记想去和想吃的内容。</div>
                   </div>
                   <button id="refreshInterestPreviewBtn" type="button" class="ghost-btn compact-btn">刷新候选项</button>
                 </div>
@@ -3078,7 +3205,7 @@
                 <input id="hotelPriceMax" type="number" min="100" max="5000" step="50" value="500" />
               </div>
               <div class="field-card full">
-                <div id="wizardHotelSummary" class="subtle-box">先完成前两步后，这里会根据兴趣点或预算推荐酒店。</div>
+                <div id="wizardHotelSummary" class="subtle-box">根据兴趣点与预算推荐酒店。</div>
               </div>
               <div id="hotelSettings" class="field-card full hotel-settings hidden">
                 <div id="wizardHotels" class="wizard-hotel-grid"></div>
@@ -3102,7 +3229,7 @@
               </div>
               <div class="wizard-confirm-card">
                 <b>天气、位置和票务一起联动</b>
-                <span id="wizardFinalHint">默认读取天气趋势、当前位置和票务条件，生成更接近真实出行节奏的方案。</span>
+                <span id="wizardFinalHint">按天气、位置与票务条件生成可执行的出行方案。</span>
               </div>
             </div>
             <p class="status" id="status">等待生成...</p>
@@ -3110,7 +3237,7 @@
 
           <section class="wizard-footer">
             <button id="wizardPrevBtn" type="button" class="ghost-btn">上一步</button>
-            <p id="wizardFooterNote" class="wizard-footer-note">先锁定目的地与出行轮廓，下一步再决定生成方式和票务条件。</p>
+            <p id="wizardFooterNote" class="wizard-footer-note">确认信息后进入下一步。</p>
             <div class="wizard-footer-actions">
               <button id="wizardNextBtn" type="button">下一步</button>
               <button id="go" type="button" class="hidden">生成我的旅行</button>
@@ -3153,7 +3280,7 @@
 
     <section id="screenResults" class="screen">
       <section class="hero">
-        <div class="hero-kicker">第二页 · 方案结果</div>
+        <div class="hero-kicker">规划结果</div>
         <h1 id="resultTitle">旅行方案</h1>
         <p id="resultMeta">根据位置、天气、预算与饭点生成的可执行路线。</p>
         <div class="hero-actions">
@@ -3181,7 +3308,7 @@
             <section id="overviewGrid" class="overview-hero-grid">
               <section class="card spotlight-card overview-spotlight">
                 <h3>旅程总览</h3>
-                <p id="overviewNarrative">生成后可以在“探索”页微调景点和美食，在“路线”页查看多天安排。天气已被收纳到右侧边栏，需要时可展开查看完整趋势。</p>
+                <p id="overviewNarrative">在“探索”页微调景点与美食，在“路线”页查看多天安排；天气在右侧边栏。</p>
                 <div class="spotlight-metrics">
                   <div class="spotlight-metric"><b id="spotlightMode">-</b><span>当前模式</span></div>
                   <div class="spotlight-metric"><b id="spotlightEstimate">-</b><span>预计安排</span></div>
@@ -3226,7 +3353,7 @@
                     <div class="signal-foot" id="overviewMapPulseMeta">等待分析</div>
                   </div>
                 </div>
-                <div class="journey-note" id="overviewNote">如果你想先控制节奏，可以直接到“探索”页勾选想去和不感兴趣的内容，再重新生成路线。</div>
+                <div class="journey-note" id="overviewNote">可到“探索”页勾选偏好后重新生成路线。</div>
               </section>
             </section>
 
@@ -3235,7 +3362,7 @@
                 <div class="overview-card-head">
                   <div>
                     <h3 class="sec-title">行程路线地图</h3>
-                    <p class="section-caption">不同颜色代表不同天的轨迹，景点、餐饮和酒店会一起显示在同一张路线图里。</p>
+                    <p class="section-caption">不同颜色代表不同天的移动轨迹。</p>
                   </div>
                   <div id="routeMapLegend" class="map-legend"></div>
                 </div>
@@ -3247,7 +3374,7 @@
                 <div class="overview-card-head">
                   <div>
                     <h3 class="sec-title">行程卡片式预览</h3>
-                    <p class="section-caption">横向快速浏览每天的天气、预算、核心景点和一句话亮点。</p>
+                    <p class="section-caption">快速浏览每天的天气、预算与核心景点。</p>
                   </div>
                 </div>
                 <div id="dayPreviewCards" class="day-preview-scroll"></div>
@@ -3258,7 +3385,7 @@
               <div class="overview-card-head">
                 <div>
                   <h3 class="sec-title">酒店卡片推荐</h3>
-                  <p class="section-caption" id="hotelCaption">按预算与距离筛选附近住宿。</p>
+                  <p class="section-caption" id="hotelCaption">按预算与距离筛选。</p>
                 </div>
               </div>
               <div id="hotels" class="hotel-grid"></div>
@@ -3268,7 +3395,7 @@
           <section class="result-page" data-result-page="discover">
             <section class="card search-panel">
               <h3 class="sec-title">高德搜索</h3>
-              <p class="section-caption">可按“搜景点 / 搜美食”查找附近结果；景点会按高德类型自动分到人文、自然、城市休闲等分类。留空关键词时默认搜索附近结果。</p>
+              <p class="section-caption">搜景点 / 搜美食，留空默认搜索附近。</p>
               <div class="search-inline">
                 <div>
                   <label for="poiSearchKind">搜索分类</label>
@@ -3290,7 +3417,7 @@
             <section class="recommendation-grid">
               <section class="card">
                 <h3 class="sec-title">景点推荐</h3>
-                <p class="section-caption">可按人文 / 自然 / 地标 / 室内分类查看，并分页浏览当前推荐。</p>
+                <p class="section-caption">按分类查看，分页浏览。</p>
                 <div class="list-toolbar">
                   <div id="attractionThemeFilters" class="filter-tabs"></div>
                   <div class="pager">
@@ -3304,7 +3431,7 @@
               </section>
               <section class="card">
                 <h3 class="sec-title">美食推荐</h3>
-                <p class="section-caption">候选美食已并入这里，可直接标记“想吃 / 不感兴趣”并按页查看。</p>
+                <p class="section-caption">标记“想吃 / 不感兴趣”并按页查看。</p>
                 <div class="list-toolbar">
                   <div>
                     <label for="foodSortMode">排序方式</label>
@@ -3328,7 +3455,7 @@
 
             <section class="card">
               <h3 class="sec-title">选择提醒</h3>
-              <p class="section-caption" id="selectionSummary">可继续调整候选项并重新生成路线。</p>
+              <p class="section-caption" id="selectionSummary">调整候选项后可重新生成路线。</p>
               <div class="subtle-box" id="transportSummary">未填写预定日期或出发信息；当前仅生成目的地内路线。</div>
               <div id="transportDetails" class="search-panel" style="margin-top:12px;"></div>
               <div id="planWarnings" class="warning-list" style="margin-top:12px;"></div>
@@ -3342,7 +3469,7 @@
             <section class="route-page-grid">
               <section class="card route">
                 <h3 class="sec-title">AI 多天路线规划</h3>
-                <p class="section-caption">按天生成路线，饭点优先匹配美食；选择酒店后会把住宿节点并入当天动线。</p>
+                <p class="section-caption">按天生成，饭点优先匹配美食，酒店并入当天动线。</p>
                 <div id="routeDayTabs" class="route-day-tabs"></div>
                 <div id="dailyItinerary" class="route-days"></div>
               </section>
@@ -3350,12 +3477,12 @@
               <aside class="sticky-support">
                 <section id="selectedTransportCard" class="card hidden">
                   <h3 class="sec-title">已添加的车次</h3>
-                  <p class="section-caption">选中的车次会显示在这里，方便和本地行程一起查看。</p>
+                  <p class="section-caption">已选车次与本地行程一起查看。</p>
                   <div id="selectedTransportContent" class="transport-confirmed-card"></div>
                 </section>
                 <section class="card">
                   <h3 class="sec-title">路线说明</h3>
-                  <p class="section-caption">这一页聚焦最终可执行路线；想改景点或美食，可回到“探索”页继续调整。</p>
+                  <p class="section-caption">最终可执行路线；改景点或美食请回“探索”页。</p>
                   <div class="journey-note" id="budgetHint">预算建议：-</div>
                   <div class="quick-jump">
                     <button type="button" class="ghost-btn" data-result-jump="discover">返回探索页</button>
@@ -3478,7 +3605,7 @@
       { label:"室内场馆", value:"indoor" }
     ];
     const FORM_STEPS = [
-      { step:1, title:"出发与车次", note:"先锁定目的地、日期、预算和出发方式，并查询车票与候选项。" },
+      { step:1, title:"基本信息", note:"先确定目的地、日期与预算；出发车次可选。" },
       { step:2, title:"兴趣点选择", note:"在候选景点和美食中标记想去和想吃的内容；也可以直接跳过。" },
       { step:3, title:"酒店选择", note:"如果需要住宿，先选一家更贴近兴趣点或预算的酒店，路线会在最终生成时围绕它展开。" },
       { step:4, title:"生成前确认", note:"最后一步只做确认；点击后一次性生成完整行程、地图和时间安排。" }
@@ -7097,17 +7224,7 @@
             var form = document.getElementById("screenForm");
             if (form && !form.classList.contains("active") && typeof showScreen === "function") showScreen("form");
           } else if (nav === "results") {
-            var hasResult = typeof plannerState !== "undefined" && plannerState && plannerState.lastResult;
-            if (!hasResult) {
-              if (window.__chatPlanReady) {
-                toast("AI 对话已给出方案，见右下角对话面板；想进完整结果页请用「开始规划」");
-              } else {
-                toast("还没有行程结果：先点「AI 对话」或「开始规划」生成一份吧");
-              }
-              setActive("plan");
-              return;
-            }
-            if (typeof showScreen === "function") showScreen("results");
+            if (typeof openPlansPanel === "function") openPlansPanel();
             setActive("results");
           }
         });
@@ -7130,5 +7247,179 @@
       }
     })();
   </script>
+
+
+
+<!-- ===== 我的行程面板（历史持久化） ===== -->
+<style>
+  .plans-panel { position: fixed; inset: 0; z-index: 1600; display: none; align-items: flex-start; justify-content: center;
+    background: rgba(20, 30, 45, .38); backdrop-filter: blur(3px); padding: 7vh 16px 32px; }
+  .plans-panel.open { display: flex; }
+  .plans-panel-inner { width: min(680px, 100%); max-height: 80vh; overflow: auto; background: #fff; border-radius: 18px;
+    box-shadow: 0 18px 60px rgba(10, 30, 50, .25); padding: 22px 24px; }
+  .plans-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  .plans-panel-head h3 { font-size: 18px; color: #1c2430; margin: 0; }
+  .plans-panel-hint { color: #8a93a2; font-size: 12px; margin-top: 4px; }
+  .plans-close { border: 0; background: #f1f3f7; color: #5d6675; width: 32px; height: 32px; border-radius: 50%;
+    font-size: 16px; line-height: 1; cursor: pointer; flex: none; }
+  .plans-close:hover { background: #e7ebf2; }
+  .plans-list { display: flex; flex-direction: column; gap: 10px; }
+  .plans-loading, .plans-empty { color: #8a93a2; font-size: 13px; text-align: center; padding: 34px 12px; line-height: 1.8; }
+  .plan-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px;
+    border: 1px solid #ecebe6; border-radius: 14px; background: #fafaf8; }
+  .plan-item:hover { border-color: #cdd8f2; background: #f5f8ff; }
+  .plan-item-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .plan-item-main b { font-size: 14px; color: #1c2430; }
+  .plan-item-meta { color: #8a93a2; font-size: 12px; }
+  .plan-item-actions { display: flex; gap: 8px; flex: none; }
+  .plan-btn { border: 1px solid #dde1e7; background: #fff; color: #3d4757; font-size: 12px; font-weight: 600;
+    padding: 7px 13px; border-radius: 9px; cursor: pointer; }
+  .plan-btn:hover { border-color: var(--brand, #2F6FED); color: var(--brand, #2F6FED); }
+  .plan-btn-primary { background: var(--brand, #2F6FED); border-color: var(--brand, #2F6FED); color: #fff; }
+  .plan-btn-primary:hover { opacity: .9; color: #fff; }
+  .plan-btn-danger:hover { border-color: #e04b4b; color: #e04b4b; }
+  @media (max-width: 640px) { .plan-item { flex-direction: column; align-items: flex-start; }
+    .plan-item-actions { width: 100%; } .plan-item-actions .plan-btn { flex: 1; text-align: center; } }
+</style>
+<div id="plansPanel" class="plans-panel" aria-hidden="true">
+  <div class="plans-panel-inner">
+    <div class="plans-panel-head">
+      <div>
+        <h3>我的行程</h3>
+        <p class="plans-panel-hint" id="plansPanelHint">生成过的行程会自动保存，随时回来查看或导出</p>
+      </div>
+      <button type="button" class="plans-close" onclick="closePlansPanel()" aria-label="关闭">×</button>
+    </div>
+    <div id="plansList" class="plans-list"></div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  function $id(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  window.setActiveNav = function (which) {
+    document.querySelectorAll(".nav-link").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.nav === which);
+    });
+  };
+  window.openPlansPanel = function () {
+    var panel = $id("plansPanel");
+    if (!panel) return;
+    panel.classList.add("open");
+    panel.setAttribute("aria-hidden", "false");
+    loadPlansList();
+  };
+  window.closePlansPanel = function () {
+    var panel = $id("plansPanel");
+    if (panel) { panel.classList.remove("open"); panel.setAttribute("aria-hidden", "true"); }
+  };
+  window.loadPlansList = function () {
+    var listEl = $id("plansList");
+    if (!listEl) return;
+    listEl.innerHTML = '<div class="plans-loading">正在加载历史行程…</div>';
+    fetch("/api/v1/plans?limit=30").then(function (res) { return res.json().then(function (d) { return { ok: res.ok, d: d }; }); })
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.d.error || "加载失败");
+        var items = r.d.items || [];
+        var hint = $id("plansPanelHint");
+        if (!items.length) {
+          listEl.innerHTML = '<div class="plans-empty">还没有保存的行程。<br>用「AI 对话」或「开始规划」生成一份，会自动出现在这里。</div>';
+          if (hint) hint.textContent = "保存过的行程都在这里";
+          return;
+        }
+        if (hint) hint.textContent = "共 " + items.length + " 份 · 生成后自动保存";
+        listEl.innerHTML = items.map(function (p) {
+          var title = p.title || (p.city || "目的地") + (p.days ? " " + p.days + "日游" : "");
+          var meta = [p.created_at || "", p.city || "目的地", p.days ? p.days + " 天" : ""].filter(Boolean).join(" · ");
+          return '<article class="plan-item">' +
+            '<div class="plan-item-main"><b>' + esc(title) + '</b><span class="plan-item-meta">' + esc(meta) + '</span></div>' +
+            '<div class="plan-item-actions">' +
+              '<button type="button" class="plan-btn plan-btn-primary" onclick="viewHistoryPlan(' + p.id + ')">查看</button>' +
+              '<button type="button" class="plan-btn" onclick="exportHistoryPlan(' + p.id + ')">导出</button>' +
+              '<button type="button" class="plan-btn plan-btn-danger" onclick="deleteHistoryPlan(' + p.id + ')">删除</button>' +
+            '</div></article>';
+        }).join("");
+      })
+      .catch(function (e) {
+        listEl.innerHTML = '<div class="plans-empty">加载失败：' + esc(e.message || "请确认后端服务已启动") + '</div>';
+      });
+  };
+  window.deleteHistoryPlan = function (id) {
+    if (!window.confirm("确定删除这份行程吗？删除后不可恢复。")) return;
+    fetch("/api/v1/plans/" + id, { method: "DELETE" }).then(function (res) {
+      if (res.ok) { loadPlansList(); } else { window.alert("删除失败，请稍后重试"); }
+    });
+  };
+  window.exportHistoryPlan = function (id) {
+    window.open("/api/v1/plans/" + id + "/export", "_blank");
+  };
+  window.viewHistoryPlan = function (id) {
+    fetch("/api/v1/plans/" + id).then(function (res) { return res.json().then(function (d) { return { ok: res.ok, d: d }; }); })
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.d.error || "加载失败");
+        if (typeof renderHistoryPlan === "function") {
+          renderHistoryPlan(r.d);
+          closePlansPanel();
+          window.setActiveNav("results");
+        }
+      })
+      .catch(function (e) { window.alert("加载行程失败：" + (e.message || "")); });
+  };
+  window.renderHistoryPlan = function (plan) {
+    var data = (plan && plan.payload) || {};
+    var payload = (plan && plan.request) || {};
+    if (!data.location && !(data.itinerary || []).length) { window.alert("这份行程数据不完整，无法渲染"); return; }
+    if (typeof plannerState === "undefined" || typeof showScreen !== "function") { return; }
+    plannerState.lastResult = data;
+    plannerState.ui.selectedHotelName = payload.include_hotel ? (data.selected_hotel_name || "") : "";
+    var cityEl = document.getElementById("city");
+    if (cityEl && data.location && data.location.city) cityEl.value = data.location.city;
+    if (data.location && data.location.lat != null && data.location.lon != null) {
+      currentLocation = { lat: Number(data.location.lat), lon: Number(data.location.lon) };
+    }
+    renderDestinationHubResults({
+      city: (data.location && data.location.city) || "",
+      items: (data.transport && data.transport.destination_hubs) || [],
+      recommended: (data.transport && data.transport.destination_hub) || {},
+      selectedName: (data.transport && data.transport.destination_station) || "",
+      selectedCode: (data.transport && data.transport.destination_station_code) || ""
+    });
+    renderPlanSummary(data, payload);
+    hydrateSelectionState(data.selection_summary || {});
+    plannerState.attractionView.filter = "all";
+    plannerState.attractionView.page = 1;
+    plannerState.attractionView.autoApplied = false;
+    plannerState.foodView.page = 1;
+    renderAttractionsView(data.attractions || data.candidate_attractions || [], payload);
+    renderFoodsView(data.foods || data.candidate_foods || []);
+    renderWarnings(data.warnings || []);
+    renderTransportPanel(data.transport || {});
+    renderHotels(data.hotels || [], payload.include_hotel, payload.hotel_price_max);
+    renderDailyItinerary(data.daily_itinerary || []);
+    renderOverviewExperience(data);
+    var bh = document.getElementById("budgetHint");
+    if (bh) bh.textContent = "预算建议：" + (data.budget_hint || "-");
+    updateSelectionSummary();
+    setResultTab("overview");
+    setWeatherSidebar(false);
+    if (typeof statusEl !== "undefined") {
+      statusEl.textContent = "已加载历史行程：" + ((data.location && data.location.city) || "") + (data.days ? " " + data.days + " 天" : "");
+    }
+    renderPlannerAside();
+    showScreen("results");
+  };
+  document.addEventListener("click", function (e) {
+    var panel = $id("plansPanel");
+    if (panel && panel.classList.contains("open") && e.target === panel) closePlansPanel();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closePlansPanel();
+  });
+})();
+</script>
+
 </body>
 </html>

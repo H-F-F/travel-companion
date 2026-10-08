@@ -17,9 +17,12 @@ os.environ["no_proxy"] = "*"
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import export as export_mod
+from . import storage
 from .agent import run_agent
 from .engine import (
     build_plan,
@@ -100,7 +103,10 @@ async def search_transport_hub_candidates(city: str = "", q: str = "", lat: floa
 async def generate_plan(req: PlanRequest) -> dict:
     try:
         payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
-        return await asyncio.to_thread(build_plan, payload)
+        plan = await asyncio.to_thread(build_plan, payload)
+        plan_id = await asyncio.to_thread(storage.save_plan, plan, title=f"{plan.get('location', {}).get('city') or ''}{plan.get('days') or ''}日游", request=payload)
+        plan["plan_id"] = plan_id
+        return plan
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -129,6 +135,14 @@ async def chat(req: ChatRequest) -> dict:
     try:
         history = [{"role": m.role, "content": m.content} for m in req.history]
         result = await asyncio.to_thread(run_agent, req.message, history, None, req.confirm)
+        plan_id = None
+        if result.plan:
+            plan_id = await asyncio.to_thread(
+                storage.save_plan,
+                result.plan,
+                title=f"{(result.plan.get('location') or {}).get('city') or ''}{(result.plan.get('days') or '')}日游",
+                request=req.confirm or None,
+            )
         return {
             "reply_text": result.reply_text,
             "steps": [
@@ -136,12 +150,50 @@ async def chat(req: ChatRequest) -> dict:
                 for s in result.steps
             ],
             "plan": result.plan,
+            "plan_id": plan_id,
             "mode": result.mode,
             "brief": result.brief,
             "meta": result.meta,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------- 历史行程（持久化） ----------------
+
+@app.get("/api/v1/plans")
+async def list_plans(limit: int = 30) -> dict:
+    """历史行程列表（不含完整 payload，列表页用）。"""
+    items = await asyncio.to_thread(storage.list_plans, max(1, min(100, limit)))
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/v1/plans/{plan_id}")
+async def get_plan_detail(plan_id: int) -> dict:
+    plan = await asyncio.to_thread(storage.get_plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="行程不存在")
+    return plan
+
+
+@app.delete("/api/v1/plans/{plan_id}")
+async def delete_plan(plan_id: int) -> dict:
+    ok = await asyncio.to_thread(storage.delete_plan, plan_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="行程不存在")
+    return {"ok": True, "id": plan_id}
+
+
+@app.get("/api/v1/plans/{plan_id}/export", response_class=HTMLResponse)
+async def export_plan(plan_id: int) -> HTMLResponse:
+    """导出一份 HTML 旅行攻略（自包含，可下载/打印为 PDF）。"""
+    plan = await asyncio.to_thread(storage.get_plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="行程不存在")
+    payload = plan.get("payload") or {}
+    meta = (payload.get("meta") if isinstance(payload, dict) else None) or {}
+    html_doc = await asyncio.to_thread(export_mod.export_plan_html, payload, meta)
+    return HTMLResponse(content=html_doc, headers={"Content-Disposition": f'attachment; filename="travel-plan-{plan_id}.html"'})
 
 
 # 前端静态文件：单服务跑全栈（API + 页面）

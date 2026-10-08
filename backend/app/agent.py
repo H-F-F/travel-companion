@@ -15,6 +15,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from . import engine
@@ -595,13 +596,39 @@ def _build_messages(message: str, history: list[dict[str, Any]] | None) -> list[
     return messages
 
 
+def _write_trace(message: str, result: AgentResult, confirmed: dict | None = None) -> None:
+    """每次对话落盘一条 AI Trace（JSONL），供审计/面试展示『每次生成都可回溯』。"""
+    meta = result.meta or {}
+    trace = {
+        "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "mode": result.mode,
+        "strategy": meta.get("strategy"),
+        "attempts": meta.get("attempts"),
+        "score": meta.get("score"),
+        "model": meta.get("model"),
+        "token_usage": meta.get("token_usage"),
+        "latency_ms": meta.get("latency_ms"),
+        "brief": result.brief,
+        "confirmed": bool(confirmed),
+        "tools": [{"tool": s.tool, "summary": s.summary, "status": s.status} for s in result.steps],
+        "has_plan": bool(result.plan),
+    }
+    try:
+        log_dir = Path(__file__).resolve().parents[2] / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "ai-trace.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(trace, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # trace 失败不影响主流程
+
+
 def run_agent(
     message: str,
     history: list[dict[str, Any]] | None = None,
     llm: LLMClient | None = None,
     confirmed: dict[str, Any] | None = None,
 ) -> AgentResult:
-    """执行一轮 Agent 对话的对外入口：包装 _run_agent_inner，统一回填可观测元数据。"""
+    """执行一轮 Agent 对话的对外入口：包装 _run_agent_inner，统一回填可观测元数据并落盘 AI Trace。"""
     client = llm or LLMClient()
     t0 = time.monotonic()
     result = _run_agent_inner(message, history, client, confirmed)
@@ -609,6 +636,7 @@ def run_agent(
         result.meta["token_usage"] = dict(client.total_usage)
         result.meta["calls"] = client.calls
         result.meta["latency_ms"] = int((time.monotonic() - t0) * 1000)
+    _write_trace(message, result, confirmed)
     return result
 
 
