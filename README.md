@@ -69,6 +69,28 @@ python -m pytest backend/tests -v
 
 覆盖行程持久化（保存 / 列表 / 删除 / date 序列化）、HTML 攻略导出（字段完整性 / HTML 注入转义）与引擎参数校验（日期必填、天数边界、预算回退），不依赖外部网络与 LLM。
 
+### 6. Docker 一键部署（可选）
+
+需要 Docker + Docker Compose。先复制 `.env.example` 为 `.env`（可全部留空，零密钥也能跑）：
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d --build
+```
+
+打开 http://localhost:8000/ 即可使用。说明：
+
+- 密钥只通过 `env_file` 在运行时注入，不写入镜像；`.dockerignore` 已排除 `.env`。
+- 行程数据库（`data/plans.db`）与 AI Trace 日志（`logs/`）通过卷挂载持久化，容器重建不丢失。
+- 镜像内置 `/health` 健康检查（30s 间隔，3 次失败视为不健康）。
+
+停止 / 重启：
+
+```powershell
+docker compose down        # 停止
+docker compose up -d       # 重新启动
+```
+
 ## 环境变量
 
 | 变量 | 必填 | 说明 |
@@ -156,7 +178,8 @@ data/
 
 ## 当前状态
 
+- v0.4.1：新增 Docker / Docker Compose 一键部署（含健康检查、卷持久化、密钥运行时注入）。
 - v0.4.0：对话回复打字机流式效果（流式视觉）；新增 pytest 自动化测试套件（9 项，覆盖存储 / 导出 / 引擎校验）。
 - v0.3.0：新增行程持久化（SQLite）、AI Trace 日志、HTML 攻略导出与「我的行程」面板。
 - v0.2.0：LLM Agent 对话式规划、分步引导式前端（顶部导航 + 四步向导）、多源数据降级与熔断、生成性能优化（分钟级 → 秒级）。
-- 建议下一步：目标日期未开售的票务预测策略、天气突发重规划、SSE 真实流式输出、Docker 一键部署。
+- 建议下一步：目标日期未开售的票务预测策略、天气突发重规划、SSE 真实流式输出。

@@ -1,0 +1,15 @@
+services:
+  travel-companion:
+    build: .
+    image: travel-companion:latest
+    container_name: travel-companion
+    ports:
+      - "8000:8000"
+    # 从 .env 读取 LLM / 高德 / 12306 配置（密钥不进镜像，仅运行时注入）
+    env_file:
+      - .env
+    # 持久化数据与 AI Trace 日志挂载到宿主机，容器重建不丢
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped

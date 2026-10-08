@@ -1,0 +1,16 @@
+# 不打包进镜像的内容
+.env
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+data/
+logs/
+frontend/_backup/
+frontend/_shots/
+backend/tests/
+backend/requirements-dev.txt
+*.md
+__pycache__/
+*.pyc
+.pytest_cache/
