@@ -156,5 +156,54 @@ def test_engine_budget_level_defaults():
     assert "warnings" in data
 
 
+
+# ---------- 会话持久化 ----------
+
+
+def test_session_save_and_resume(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_DB", tmp_path / "plans.db")
+    msgs = [
+        {"role": "user", "content": "帮我规划西安 2 天"},
+        {"role": "assistant", "content": "已确认信息"},
+        {"role": "user", "content": "预算标准一点"},
+    ]
+    sid = storage.save_session_messages(msgs)
+    assert sid > 0
+
+    # 续写同一会话
+    msgs2 = msgs + [{"role": "assistant", "content": "好的，按标准预算重新生成"}]
+    sid2 = storage.save_session_messages(msgs2, sid)
+    assert sid2 == sid
+
+    sess = storage.get_session_messages(sid)
+    assert sess is not None
+    assert len(sess["messages"]) == 4
+    assert sess["messages"][0] == {"role": "user", "content": "帮我规划西安 2 天"}
+
+
+def test_session_list_and_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "_DB", tmp_path / "plans.db")
+    s1 = storage.save_session_messages([{"role": "user", "content": "去成都玩三天"}])
+    s2 = storage.save_session_messages([{"role": "user", "content": "北京周末"}])
+    items = storage.list_sessions(limit=10)
+    ids = [i["id"] for i in items]
+    assert s2 in ids and s1 in ids
+    # 标题取首条用户消息，列表不含完整消息
+    titles = {i["id"]: i["title"] for i in items}
+    assert titles[s1] == "去成都玩三天"
+    assert all("messages" not in i for i in items)
+
+    assert storage.delete_session(s1) is True
+    assert storage.get_session_messages(s1) is None
+
+
+def test_session_resume_when_missing(tmp_path, monkeypatch):
+    """传一个不存在的 session_id 时应新建会话而不是报错。"""
+    monkeypatch.setattr(storage, "_DB", tmp_path / "plans.db")
+    sid = storage.save_session_messages([{"role": "user", "content": "你好"}], 9999)
+    assert sid != 9999
+    assert storage.get_session_messages(sid) is not None
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

@@ -48,6 +48,7 @@ class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = Field(default_factory=list)
     confirm: dict | None = Field(default=None, description="确认卡参数：用户确认后直接生成行程")
+    session_id: int | None = Field(default=None, description="对话会话 ID：传则续写该会话，不传则新建")
 
 
 @app.get("/health")
@@ -131,7 +132,11 @@ async def preview_plan(req: PlanRequest) -> dict:
 
 @app.post("/api/v1/chat")
 async def chat(req: ChatRequest) -> dict:
-    """对话式规划入口：LLM Agent 编排工具，支持确认卡（confirm）与校验重试，失败自动降级到规则引擎。"""
+    """对话式规划入口：LLM Agent 编排工具，支持确认卡（confirm）与校验重试，失败自动降级到规则引擎。
+
+    会话持久化：每轮结束把完整对话（历史 + 用户 + 助手）写入 SQLite，
+    前端刷新后可通过 session_id 恢复对话。
+    """
     try:
         history = [{"role": m.role, "content": m.content} for m in req.history]
         result = await asyncio.to_thread(run_agent, req.message, history, None, req.confirm)
@@ -143,6 +148,16 @@ async def chat(req: ChatRequest) -> dict:
                 title=f"{(result.plan.get('location') or {}).get('city') or ''}{(result.plan.get('days') or '')}日游",
                 request=req.confirm or None,
             )
+        # 会话持久化：完整消息 = 历史 + 本轮用户 + 本轮助手
+        session_id = req.session_id
+        if session_id is not None:
+            saved = await asyncio.to_thread(storage.get_session_messages, session_id)
+            if saved is None:
+                session_id = None  # 会话不存在则新建
+        messages = history + [{"role": "user", "content": req.message}]
+        if result.reply_text:
+            messages.append({"role": "assistant", "content": result.reply_text})
+        session_id = await asyncio.to_thread(storage.save_session_messages, messages, session_id)
         return {
             "reply_text": result.reply_text,
             "steps": [
@@ -151,12 +166,38 @@ async def chat(req: ChatRequest) -> dict:
             ],
             "plan": result.plan,
             "plan_id": plan_id,
+            "session_id": session_id,
             "mode": result.mode,
             "brief": result.brief,
             "meta": result.meta,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------- 对话会话（持久化） ----------------
+
+@app.get("/api/v1/sessions")
+async def list_sessions(limit: int = 20) -> dict:
+    """历史对话会话列表（标题取首条用户消息，不含完整消息）。"""
+    items = await asyncio.to_thread(storage.list_sessions, max(1, min(50, limit)))
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/v1/sessions/{session_id}")
+async def get_session(session_id: int) -> dict:
+    session = await asyncio.to_thread(storage.get_session_messages, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return session
+
+
+@app.delete("/api/v1/sessions/{session_id}")
+async def delete_session(session_id: int) -> dict:
+    ok = await asyncio.to_thread(storage.delete_session, session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"ok": True, "id": session_id}
 
 
 # ---------------- 历史行程（持久化） ----------------

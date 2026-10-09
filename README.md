@@ -9,7 +9,7 @@
 3. **多源数据整合**：高德地图（地理编码 / POI / 酒店）、Open-Meteo（天气）、OSM Overpass（POI 兜底）、12306 MCP（车站 / 直达 / 中转票务）。
 4. **可执行行程**：景点 / 美食「想去 / 想吃 / 不感兴趣」二次筛选，结合天气、预算、距离、口味偏好、室内外属性、车次到达时间与酒店位置，生成多日 itinerary（含每日动线、天气提示与预算建议）。
 5. **可靠性工程**：多数据源降级链、外部服务熔断、POI 进程级缓存、HTTPS 连接复用与并发抓取、异步线程池隔离，单次行程生成耗时从分钟级降至秒级，且不阻塞其他请求。
-6. **历史行程与导出**：生成的行程自动持久化到 SQLite（「我的行程」随时回看 / 复用 / 删除）；每次 AI 调用落盘 AI Trace 日志（模式 / 策略 / 质量分 / Token / 耗时可回溯）；一键导出为自包含 HTML 旅行攻略（可打印 / 转 PDF）。
+6. **历史行程与会话持久化**：生成的行程自动持久化到 SQLite（「我的行程」随时回看 / 复用 / 删除）；对话会话持久化，刷新页面后对话不丢失、可继续；每次 AI 调用落盘 AI Trace 日志（模式 / 策略 / 质量分 / Token / 耗时可回溯）；一键导出为自包含 HTML 旅行攻略（可打印 / 转 PDF）。
 
 ## 技术栈
 
@@ -67,7 +67,7 @@ pip install -r backend/requirements-dev.txt
 python -m pytest backend/tests -v
 ```
 
-覆盖行程持久化（保存 / 列表 / 删除 / date 序列化）、HTML 攻略导出（字段完整性 / HTML 注入转义）与引擎参数校验（日期必填、天数边界、预算回退），不依赖外部网络与 LLM。
+覆盖行程持久化（保存 / 列表 / 删除 / date 序列化）、会话持久化（保存续写 / 列表 / 删除 / 失效回退）、HTML 攻略导出（字段完整性 / HTML 注入转义）与引擎参数校验（日期必填、天数边界、预算回退），不依赖外部网络与 LLM。
 
 ### 6. Docker 一键部署（可选）
 
@@ -122,6 +122,10 @@ docker compose up -d       # 重新启动
 | `GET` | `/api/v1/plans/{id}` | 历史行程详情（含生成参数） |
 | `DELETE` | `/api/v1/plans/{id}` | 删除历史行程 |
 | `GET` | `/api/v1/plans/{id}/export` | 导出 HTML 旅行攻略（自包含，可打印 / 转 PDF） |
+| `POST` | `/api/v1/chat` | 对话式规划（传 `session_id` 续写会话，否则新建并返回） |
+| `GET` | `/api/v1/sessions` | 对话会话列表（标题 / 消息数，不含完整消息） |
+| `GET` | `/api/v1/sessions/{id}` | 会话详情（完整消息，用于刷新后恢复对话） |
+| `DELETE` | `/api/v1/sessions/{id}` | 删除对话会话 |
 
 ## LLM Agent 架构
 
@@ -161,7 +165,7 @@ backend/
     station_catalog.py      # 内置车站目录
     recommendation.py       # 评分 / 推荐模型
     models.py               # Pydantic 请求模型
-    storage.py              # 行程持久化（SQLite：保存 / 列表 / 详情 / 删除）
+    storage.py              # 持久化（SQLite：行程 plans + 对话会话 sessions）
     export.py               # 行程导出：自包含 HTML 旅行攻略渲染
 frontend/
   index.html                # 单页前端（导航 + 向导 + 结果页 + 对话面板 + 我的行程）
@@ -178,6 +182,7 @@ data/
 
 ## 当前状态
 
+- v0.5.0：对话会话持久化（chat 支持 `session_id` 续写，刷新后对话可恢复；sessions 列表 / 详情 / 删除 API）。
 - v0.4.1：新增 Docker / Docker Compose 一键部署（含健康检查、卷持久化、密钥运行时注入）。
 - v0.4.0：对话回复打字机流式效果（流式视觉）；新增 pytest 自动化测试套件（9 项，覆盖存储 / 导出 / 引擎校验）。
 - v0.3.0：新增行程持久化（SQLite）、AI Trace 日志、HTML 攻略导出与「我的行程」面板。

@@ -6933,6 +6933,27 @@ body, body *{font-family:inherit;}
     const sendBtn = document.getElementById("chatSendBtn");
     const history = [];
     let busy = false;
+    let sessionId = null;
+    try {
+      sessionId = Number(localStorage.getItem("tc_chat_session")) || null;
+    } catch (e) {}
+
+    // 刷新后恢复历史会话（只重放文本消息，卡片/步骤不重放）
+    function restoreSession() {
+      if (!sessionId || messagesEl.childElementCount > 0) return;
+      fetch("/api/v1/sessions/" + sessionId).then(function (res) { return res.json(); })
+        .then(function (s) {
+          if (!s || !s.messages || !s.messages.length) return;
+          (s.messages || []).forEach(function (m) {
+            if (m && (m.role === "user" || m.role === "assistant")) {
+              addMsg(m.role, m.content || "");
+              history.push({ role: m.role, content: m.content || "" });
+            }
+          });
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        })
+        .catch(function () {});
+    }
 
     const TOOL_LABELS = {
       geocode: "定位城市",
@@ -7128,7 +7149,7 @@ body, body *{font-family:inherit;}
       fetch("/api/v1/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: "确认以上信息，开始生成", history: history.slice(), confirm: brief }),
+        body: JSON.stringify({ message: "确认以上信息，开始生成", history: history.slice(), confirm: brief, session_id: sessionId }),
       })
         .then(function (res) { return res.json(); })
         .then(function (data) {
@@ -7147,6 +7168,10 @@ body, body *{font-family:inherit;}
           }
           if (data.meta) addMeta(data.meta);
           history.push({ role: "assistant", content: data.reply_text || "" });
+          if (data.session_id) {
+            sessionId = data.session_id;
+            try { localStorage.setItem("tc_chat_session", String(sessionId)); } catch (e) {}
+          }
         })
         .catch(function (err) {
           typing.remove();
@@ -7170,7 +7195,7 @@ body, body *{font-family:inherit;}
       fetch("/api/v1/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, history: history.slice(0, -1) }),
+        body: JSON.stringify({ message: text, history: history.slice(0, -1), session_id: sessionId }),
       })
         .then(function (res) { return res.json(); })
         .then(function (data) {
@@ -7192,6 +7217,10 @@ body, body *{font-family:inherit;}
           }
           if (data.meta) addMeta(data.meta);
           history.push({ role: "assistant", content: data.reply_text || "" });
+          if (data.session_id) {
+            sessionId = data.session_id;
+            try { localStorage.setItem("tc_chat_session", String(sessionId)); } catch (e) {}
+          }
         })
         .catch(function (err) {
           typing.remove();
@@ -7206,7 +7235,10 @@ body, body *{font-family:inherit;}
 
     toggleBtn.addEventListener("click", function () {
       panel.classList.toggle("hidden");
-      if (!panel.classList.contains("hidden")) input.focus();
+      if (!panel.classList.contains("hidden")) {
+        input.focus();
+        restoreSession();
+      }
     });
     closeBtn.addEventListener("click", function () { panel.classList.add("hidden"); });
     sendBtn.addEventListener("click", sendMessage);
