@@ -17,13 +17,13 @@ os.environ["no_proxy"] = "*"
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import export as export_mod
 from . import storage
-from .agent import run_agent
+from .agent import run_agent, run_agent_stream
 from .engine import (
     build_plan,
     build_plan_check,
@@ -173,6 +173,86 @@ async def chat(req: ChatRequest) -> dict:
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------- 对话流式（SSE） ----------------
+
+@app.post("/api/v1/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """对话式规划流式入口：与 /api/v1/chat 同编排，但 LLM 最终生成按 token 推送。
+
+    事件协议（SSE `data: {...}` 行）：
+      {"type":"token","text"}    文本片段
+      {"type":"step","step":{}}  工具步骤
+      {"type":"brief","brief":{}} 确认卡参数
+      {"type":"plan","plan":{}}  行程（含 plan_id）
+      {"type":"done","mode","reply_text","steps","meta","session_id"} 结束
+    """
+    history = [{"role": m.role, "content": m.content} for m in req.history]
+    gen = run_agent_stream(req.message, history, None, req.confirm)
+
+    async def event_stream():
+        plan_id = None
+        session_id = req.session_id
+        try:
+            while True:
+                ev = await asyncio.to_thread(_next_or_none, gen)
+                if ev is None:
+                    break
+                etype = ev.get("type")
+                if etype == "plan" and ev.get("plan"):
+                    plan_id = await asyncio.to_thread(
+                        storage.save_plan,
+                        ev["plan"],
+                        title=f"{(ev['plan'].get('location') or {}).get('city') or ''}{(ev['plan'].get('days') or '')}日游",
+                        request=req.confirm or None,
+                    )
+                    yield f"data: {_sse(ev | {'plan_id': plan_id})}\n\n"
+                elif etype == "done":
+                    # 会话持久化：历史 + 本轮用户 + 助手回复
+                    if session_id is not None:
+                        saved = await asyncio.to_thread(storage.get_session_messages, session_id)
+                        if saved is None:
+                            session_id = None
+                    messages = history + [{"role": "user", "content": req.message}]
+                    if ev.get("reply_text"):
+                        messages.append({"role": "assistant", "content": ev["reply_text"]})
+                    session_id = await asyncio.to_thread(storage.save_session_messages, messages, session_id)
+                    yield f"data: {_sse(ev | {'session_id': session_id})}\n\n"
+                else:
+                    yield f"data: {_sse(ev)}\n\n"
+        except Exception as exc:  # 流中途异常：推送 done 让前端收尾
+            yield f"data: {_sse({'type': 'done', 'mode': 'fallback', 'reply_text': f'请求失败：{exc}，请稍后重试。', 'steps': [], 'meta': {}, 'session_id': session_id})}\n\n"
+        finally:
+            try:
+                gen.close()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+def _next_or_none(gen):
+    """取下一个事件；生成器正常结束时返回 None（避免 StopIteration 被 asyncio 包装）。"""
+    try:
+        return next(gen)
+    except StopIteration:
+        return None
+
+
+def _sse(ev: dict) -> str:
+    """SSE 数据行：JSON 序列化（兼容 date 对象）。"""
+    import json as _json
+
+    return _json.dumps(ev, ensure_ascii=False, default=str)
 
 
 # ---------------- 对话会话（持久化） ----------------

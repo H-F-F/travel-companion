@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import json
 
 _loaded_env = False
 
@@ -116,3 +117,105 @@ class LLMClient:
             return data["choices"][0]["message"]
         except (KeyError, IndexError, ValueError) as exc:
             raise LLMError(f"LLM 响应解析失败: {exc}") from exc
+
+    def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 2048,
+        temperature: float = 0.4,
+    ) -> Any:
+        """流式调用 chat/completions，逐帧产出文本片段。
+
+        生成器事件（tuple[str, Any]）：
+          ("delta", text)   —— 本轮生成的一段文本（无工具调用时）
+          ("message", msg)  —— 整包消息（工具轮：含 tool_calls，已完整累积）
+          ("error", msg)    —— 失败原因（调用方应抛出 LLMError）
+
+        工具轮处理：OpenAI 兼容接口首帧出现 delta.tool_calls 时，本方法累积
+        完整 tool_calls 后以 ("message", ...) 返回，等价于一次非流式调用，
+        保证工具编排逻辑与 chat() 完全一致。
+        """
+        if not self.available:
+            yield ("error", "LLM 未配置：需要设置 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL")
+            return
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        url = f"{self.base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+
+        tool_call_mode: bool | None = None  # None=未知, True=工具轮, False=文本轮
+        content_parts: list[str] = []
+        tool_calls_acc: dict[int, dict[str, Any]] = {}
+        usage: dict[str, Any] = {}
+
+        try:
+            with httpx.Client(timeout=self.timeout, trust_env=False) as client:
+                with client.stream("POST", url, headers=headers, json=payload) as resp:
+                    if resp.status_code != 200:
+                        body = resp.read().decode("utf-8", errors="replace")[:300]
+                        yield ("error", f"LLM 返回 HTTP {resp.status_code}: {body}")
+                        return
+                    for line in resp.iter_lines():
+                        line = (line or "").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[len("data:"):].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        if chunk.get("usage"):
+                            usage = chunk.get("usage") or {}
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta") or {}
+                        if delta.get("content"):
+                            content_parts.append(delta["content"])
+                            if tool_call_mode is None:
+                                tool_call_mode = False
+                            yield ("delta", delta["content"])
+                        if delta.get("tool_calls"):
+                            tool_call_mode = True
+                            for tc in delta["tool_calls"]:
+                                idx = int(tc.get("index") or 0)
+                                acc = tool_calls_acc.setdefault(
+                                    idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                                )
+                                if tc.get("id"):
+                                    acc["id"] = tc["id"]
+                                fn = tc.get("function") or {}
+                                if fn.get("name"):
+                                    acc["function"]["name"] += fn["name"]
+                                if fn.get("arguments"):
+                                    acc["function"]["arguments"] += fn["arguments"]
+        except httpx.HTTPError as exc:
+            yield ("error", f"LLM 请求失败: {exc}")
+            return
+
+        self.calls += 1
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            try:
+                self.total_usage[key] = self.total_usage.get(key, 0) + int(usage.get(key) or 0)
+            except (TypeError, ValueError):
+                pass
+
+        if tool_call_mode:
+            tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+            yield ("message", {"role": "assistant", "content": "".join(content_parts), "tool_calls": tool_calls})
+            return
+        # 文本轮：整包消息仅作结束标记（内容已逐帧 yield）
+        yield ("message", {"role": "assistant", "content": "".join(content_parts)})

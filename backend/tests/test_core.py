@@ -15,6 +15,8 @@ import pytest
 from backend.app import engine
 from backend.app import export as export_mod
 from backend.app import storage
+from backend.app import agent
+from backend.app.llm_client import LLMClient
 
 # ---------- storage ----------
 
@@ -203,6 +205,45 @@ def test_session_resume_when_missing(tmp_path, monkeypatch):
     sid = storage.save_session_messages([{"role": "user", "content": "你好"}], 9999)
     assert sid != 9999
     assert storage.get_session_messages(sid) is not None
+
+
+
+# ---------- 流式对话 ----------
+
+
+def _no_llm_client(monkeypatch):
+    """构造不可用 LLM（屏蔽 .env 加载并清空环境变量），用于测降级路径。"""
+    monkeypatch.setattr("backend.app.llm_client._load_local_env", lambda: None)
+    for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_TIMEOUT"):
+        monkeypatch.delenv(k, raising=False)
+    client = LLMClient()
+    assert not client.available
+    return client
+
+
+def test_stream_events_done_when_no_llm(monkeypatch):
+    """LLM 未配置时流式入口应降级并产出单个 done 事件。"""
+    events = list(agent.run_agent_stream("去西安玩 2 天", [], _no_llm_client(monkeypatch)))
+    types = [e.get("type") for e in events]
+    # 规则引擎兜底可能直接产出完整行程（plan）或仅文本（done）
+    assert types == ["done"] or types == ["plan", "done"], f"事件序列异常: {types}"
+    done = events[-1]
+    assert done.get("mode") in ("fallback", "engine")
+    assert done.get("reply_text")
+
+
+def test_stream_events_done_when_empty(monkeypatch):
+    """空消息产出 needs_input done。"""
+    events = list(agent.run_agent_stream("  ", [], _no_llm_client(monkeypatch)))
+    assert events and events[0]["type"] == "done"
+    assert events[0]["mode"] == "needs_input"
+
+
+def test_stream_llm_unconfigured_error(monkeypatch):
+    """stream_chat 未配置时应产出 error 事件而不是抛异常。"""
+    events = list(_no_llm_client(monkeypatch).stream_chat([{"role": "user", "content": "hi"}]))
+    assert events and events[0][0] == "error"
+    assert "LLM 未配置" in events[0][1]
 
 
 if __name__ == "__main__":

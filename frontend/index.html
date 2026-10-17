@@ -7184,6 +7184,7 @@ body, body *{font-family:inherit;}
         });
     }
 
+    // SSE 真流式：逐 token 渲染，工具步骤即时推送；失败自动降级到整包接口
     function sendMessage() {
       const text = input.value.trim();
       if (!text || busy) return;
@@ -7191,6 +7192,109 @@ body, body *{font-family:inherit;}
       sendBtn.disabled = true;
       addMsg("user", text);
       history.push({ role: "user", content: text });
+      const typing = addTyping();
+      let bubble = null;
+      let hasSteps = false;
+      let receivedToken = false;
+
+      function cleanup() {
+        typing.remove();
+        busy = false;
+        sendBtn.disabled = false;
+        input.value = "";
+      }
+
+      function dispatch(ev) {
+        if (ev.type === "token") {
+          receivedToken = true;
+          if (!bubble) {
+            typing.remove();
+            bubble = addMsg("assistant", "");
+          }
+          bubble.textContent += String(ev.text || "");
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } else if (ev.type === "step") {
+          hasSteps = true;
+          if (ev.step) addSteps([ev.step], null);
+        } else if (ev.type === "brief") {
+          if (ev.brief) addBriefCard(ev.brief);
+        } else if (ev.type === "plan") {
+          if (ev.plan) {
+            addPlanCard(ev.plan);
+            window.__chatPlanReady = true;
+          }
+        } else if (ev.type === "done") {
+          if (!receivedToken) {
+            if (hasSteps) {
+              typing.remove();
+              addSteps(ev.steps || [], function () {
+                addMsgTyped("assistant", ev.reply_text || "");
+              });
+            } else if (ev.reply_text) {
+              typing.remove();
+              addMsgTyped("assistant", ev.reply_text || "");
+            }
+          }
+          if (ev.meta) addMeta(ev.meta);
+          history.push({ role: "assistant", content: ev.reply_text || "" });
+          if (ev.session_id) {
+            sessionId = ev.session_id;
+            try { localStorage.setItem("tc_chat_session", String(sessionId)); } catch (e) {}
+          }
+          typing.remove();
+          cleanup();
+        }
+      }
+
+      function handleFrame(frame) {
+        const line = String(frame).trim();
+        if (line.indexOf("data:") !== 0) return;
+        const payload = line.slice(5).trim();
+        if (!payload) return;
+        let ev;
+        try { ev = JSON.parse(payload); } catch (e) { return; }
+        dispatch(ev);
+      }
+
+      fetch("/api/v1/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+        body: JSON.stringify({ message: text, history: history.slice(0, -1), session_id: sessionId }),
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.body.getReader();
+        })
+        .then(function (reader) {
+          const decoder = new TextDecoder("utf-8");
+          let buf = "";
+          function pump() {
+            return reader.read().then(function (r) {
+              buf += decoder.decode(r.value || new Uint8Array(), { stream: !r.done });
+              let idx;
+              while ((idx = buf.indexOf("\n\n")) >= 0) {
+                const frame = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                handleFrame(frame);
+              }
+              if (r.done) {
+                if (buf.trim()) handleFrame(buf);
+                cleanup();
+              } else {
+                return pump();
+              }
+            });
+          }
+          return pump();
+        })
+        .catch(function (err) {
+          typing.remove();
+          fallbackChat(text, err);
+        });
+    }
+
+    // 流式不可用时的整包降级（等价于原 /api/v1/chat 路径）
+    function fallbackChat(text, err) {
       const typing = addTyping();
       fetch("/api/v1/chat", {
         method: "POST",
@@ -7222,9 +7326,9 @@ body, body *{font-family:inherit;}
             try { localStorage.setItem("tc_chat_session", String(sessionId)); } catch (e) {}
           }
         })
-        .catch(function (err) {
+        .catch(function () {
           typing.remove();
-          addMsg("assistant", "请求失败：" + err.message + "，请稍后重试。");
+          addMsg("assistant", "请求失败：" + (err && err.message ? err.message : "") + "，请稍后重试。");
         })
         .finally(function () {
           busy = false;

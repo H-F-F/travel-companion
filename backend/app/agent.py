@@ -1035,3 +1035,211 @@ def _fallback_plan(
             mode="needs_input",
             meta=meta,
         )
+# ---------------- 流式对话（SSE） ----------------
+
+def _final_meta(meta: dict[str, Any], client: LLMClient, t0: float) -> dict[str, Any]:
+    """回填可观测元数据（token / 调用次数 / 耗时）。"""
+    if client.available and meta is not None:
+        meta["token_usage"] = dict(client.total_usage)
+        meta["calls"] = client.calls
+        meta["latency_ms"] = int((time.monotonic() - t0) * 1000)
+    return meta
+
+
+def _yield_result(result: AgentResult, meta: dict[str, Any], client: LLMClient, t0: float) -> None:
+    """按流式协议产出 plan / done 事件（整包结果路径：降级、confirmed、多候选）。"""
+    if result.plan:
+        yield {"type": "plan", "plan": result.plan}
+    yield {
+        "type": "done",
+        "mode": result.mode,
+        "reply_text": result.reply_text,
+        "steps": [{"tool": s.tool, "args": s.args, "summary": s.summary, "status": s.status, "seq": s.seq} for s in result.steps],
+        "meta": _final_meta(meta, client, t0),
+    }
+
+
+def run_agent_stream(
+    message: str,
+    history: list[dict[str, Any]] | None = None,
+    llm: LLMClient | None = None,
+    confirmed: dict[str, Any] | None = None,
+):
+    """流式对话入口（生成器，产出 SSE 事件 dict）。
+
+    事件协议：
+      {"type": "token", "text": str}    —— LLM 生成的一段文本（逐帧）
+      {"type": "step", "step": {...}}   —— 一个工具步骤（即时推送）
+      {"type": "brief", "brief": {...}} —— 确认卡参数
+      {"type": "plan", "plan": {...}}   —— 生成的行程（无 plan_id，由 API 层入库补充）
+      {"type": "done", "mode", "reply_text", "steps", "meta"} —— 结束（steps 供降级路径整包渲染）
+
+    编排逻辑与 run_agent 一致（校验重试 / 多候选择优 / 降级熔断），
+    仅当 LLM 最终生成文本时改为逐 token 产出；工具轮自动回退整包调用。
+    """
+    client = llm or LLMClient()
+    t0 = time.monotonic()
+    yield from _run_agent_inner_stream(message, history, client, confirmed, t0)
+
+
+def _run_agent_inner_stream(
+    message: str,
+    history: list[dict[str, Any]] | None,
+    client: LLMClient,
+    confirmed: dict[str, Any] | None,
+    t0: float,
+):
+    text = (message or "").strip()
+    if not text and not confirmed:
+        yield {
+            "type": "done",
+            "mode": "needs_input",
+            "reply_text": "请描述你的旅行需求，例如：帮我规划下周六去西安玩 2 天。",
+            "steps": [],
+            "meta": {},
+        }
+        return
+
+    meta: dict[str, Any] = {
+        "strategy": "llm",
+        "attempts": 0,
+        "validation": {"ok": True, "errors": []},
+        "score": None,
+        "model": client.model if client.available else "",
+        "token_usage": {},
+        "calls": 0,
+        "latency_ms": 0,
+    }
+
+    # 用户已确认参数 → 整包生成（行程生成为主，流式收益小）
+    if confirmed:
+        result = _run_with_confirmed(client, text, history, confirmed, meta)
+        yield from _yield_result(result, meta, client, t0)
+        return
+
+    steps: list[AgentStep] = []
+    plan: dict[str, Any] | None = None
+    candidates: list[dict[str, Any]] = []
+    reply_parts: list[str] = []
+
+    if client.available:
+        try:
+            messages = _build_messages(text, history)
+            for round_index in range(MAX_AGENT_ROUNDS):
+                msg: dict[str, Any] | None = None
+                error_text: str | None = None
+                for kind, payload in client.stream_chat(messages, tools=TOOL_SPECS):
+                    if kind == "delta":
+                        reply_parts.append(payload)
+                        yield {"type": "token", "text": payload}
+                    elif kind == "message":
+                        msg = payload
+                    elif kind == "error":
+                        error_text = payload
+                        break
+                if error_text:
+                    raise LLMError(error_text)
+                if msg is None:
+                    raise LLMError("LLM 流式响应为空")
+                messages.append(msg)
+
+                tool_calls = msg.get("tool_calls") or []
+                if not tool_calls:
+                    reply = "".join(reply_parts).strip() or "我已经完成规划，你可以继续追问行程细节。"
+                    brief = _build_brief(parse_natural_language(text))
+                    if not plan and brief.get("city"):
+                        yield {"type": "brief", "brief": brief}
+                        yield {
+                            "type": "done",
+                            "mode": "needs_input",
+                            "reply_text": reply,
+                            "steps": [],
+                            "meta": _final_meta(meta, client, t0),
+                        }
+                        return
+                    yield {
+                        "type": "done",
+                        "mode": "llm",
+                        "reply_text": reply,
+                        "steps": [],
+                        "meta": _final_meta(meta, client, t0),
+                    }
+                    return
+
+                retry_needed = False
+                for tc in tool_calls:
+                    fn = tc.get("function") or {}
+                    name = str(fn.get("name") or "")
+                    raw_args = fn.get("arguments") or "{}"
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args or {})
+                    except json.JSONDecodeError:
+                        args = {}
+                    result_text, result_plan = _execute_tool(name, args)
+                    status = "error" if result_text.startswith(("工具执行失败", "未知工具")) else "ok"
+
+                    if name == "generate_itinerary":
+                        meta["attempts"] += 1
+                        plan = result_plan
+                        errors = _validate_plan(plan)
+                        if errors:
+                            meta["validation"]["ok"] = False
+                            meta["validation"]["errors"] = errors
+                            if meta["attempts"] < MAX_ITINERARY_ATTEMPTS:
+                                messages.append({
+                                    "role": "user",
+                                    "content": (
+                                        f"[行程校验未通过] 你刚生成的行程存在以下问题：{'；'.join(errors)}。"
+                                        "请修正后重新调用 generate_itinerary 工具，不要再调用其他工具。"
+                                    ),
+                                })
+                                steps.append(
+                                    AgentStep(
+                                        tool=name, args=args,
+                                        summary=f"第 {meta['attempts']} 次尝试校验未通过：{'；'.join(errors)}",
+                                        status="error", seq=len(steps) + 1,
+                                    )
+                                )
+                                yield {"type": "step", "step": steps[-1].__dict__}
+                                plan = None
+                                retry_needed = True
+                                break
+                            result = _fallback_plan(
+                                text, steps,
+                                reason=f"LLM 行程生成连续 {meta['attempts']} 次未通过校验：{'；'.join(errors)}",
+                                meta=meta,
+                            )
+                            yield from _yield_result(result, meta, client, t0)
+                            return
+                        candidates.append(plan)
+                    else:
+                        step = AgentStep(
+                            tool=name, args=args, summary=result_text[:160],
+                            status=status, seq=len(steps) + 1,
+                        )
+                        steps.append(step)
+                        yield {"type": "step", "step": step.__dict__}
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.get("id") or f"call_{round_index}_{name}",
+                                "content": result_text[:MAX_TOOL_RESULT_CHARS],
+                            }
+                        )
+                if retry_needed:
+                    continue
+
+            # 多候选择优
+            result = _pick_best_candidate(text, steps, candidates, meta)
+            yield from _yield_result(result, meta, client, t0)
+            return
+        except LLMError as exc:
+            result = _fallback_plan(text, steps, reason=str(exc), meta=meta)
+            yield from _yield_result(result, meta, client, t0)
+            return
+        except Exception as exc:  # noqa: BLE001
+            result = _fallback_plan(text, steps, reason=f"agent 异常: {exc}", meta=meta)
+            yield from _yield_result(result, meta, client, t0)
+            return
+    result = _fallback_plan(text, steps, reason="LLM 未配置", meta=meta)
+    yield from _yield_result(result, meta, client, t0)
