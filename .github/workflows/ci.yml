@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements-dev.txt
+
+      - name: Backend syntax check
+        run: python -m py_compile backend/app/*.py
+
+      - name: Run tests
+        run: python -m pytest backend/tests -v
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Frontend JS syntax check
+        run: |
+          python .github/scripts/extract_js.py frontend/index.html /tmp/app.js
+          node --check /tmp/app.js
