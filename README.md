@@ -4,6 +4,8 @@
 
 [![CI](https://github.com/H-F-F/travel-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/H-F-F/travel-companion/actions/workflows/ci.yml)
 
+![产品界面](docs/screenshot.png)
+
 ## 功能特性
 
 1. **对话式智能规划**：点击「AI 对话规划」，用自然语言描述需求，LLM Agent 基于 Function Calling 自动编排地理编码、天气、POI、车站、行程生成等工具，多轮追问补全出发日期 / 城市 / 预算等信息后输出完整方案；未配置或调用失败时自动降级到规则引擎，功能始终可用。
@@ -13,6 +15,25 @@
 5. **可靠性工程**：多数据源降级链、外部服务熔断、POI 进程级缓存、HTTPS 连接复用与并发抓取、异步线程池隔离，单次行程生成耗时从分钟级降至秒级，且不阻塞其他请求。
 6. **历史行程与会话持久化**：生成的行程自动持久化到 SQLite（「我的行程」随时回看 / 复用 / 删除）；对话会话持久化，刷新页面后对话不丢失、可继续；每次 AI 调用落盘 AI Trace 日志（模式 / 策略 / 质量分 / Token / 耗时可回溯）；一键导出为自包含 HTML 旅行攻略（可打印 / 转 PDF）。
 7. **SSE 真实流式输出**：对话回复按 token 逐帧推送（`/api/v1/chat/stream`），工具步骤即时出现；LLM 流式失败或未配置时自动降级到整包接口，体验不中断。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    U[用户] --> FE[前端 SPA<br/>原生 HTML / CSS / JS]
+    FE -->|HTTP / SSE| API[FastAPI 服务<br/>/chat · /chat/stream · /plan · /plans · /sessions]
+    API --> AG[LLM Agent<br/>Function Calling 编排]
+    AG --> LLM[LLM API<br/>通义千问等 OpenAI 兼容]
+    AG -->|LLM 不可用自动降级| EN[规则引擎]
+    EN --> GEO[地理编码<br/>高德 / 内置兜底]
+    EN --> WX[天气<br/>Open-Meteo / 回退]
+    EN --> POI[POI 检索<br/>高德 / OSM / 内置兜底]
+    EN --> RAIL[12306 MCP<br/>车站 / 直达 / 中转]
+    API --> DB[(SQLite<br/>行程 plans + 会话 sessions)]
+    API --> TR[AI Trace 日志]
+    API --> EX[HTML 攻略导出]
+    D[Docker 部署 / CI 自动化] --> API
+```
 
 ## 技术栈
 
@@ -183,6 +204,17 @@ data/
 
 - [项目大纲](./智能旅行管家-项目大纲.md) · [需求说明](./项目需求说明.md) · [路线图](./项目路线图.md) · [任务清单](./任务清单.md)
 - [决策记录](./决策记录.md) · [问题记录](./问题记录.md) · [经验教训](./经验教训.md) · [风险登记](./风险登记.md)
+
+## 演示模式（DEMO_MODE）
+
+面试 / 现场演示推荐开启：`.env` 中设置 `DEMO_MODE=1` 后，服务**强制禁用 LLM**，所有规划走规则引擎 + 内置数据，不发起任何外部 API 请求，保证演示不因外部服务波动而翻车。前端导航栏会亮起「演示模式」徽标。
+
+```powershell
+# .env 中设置
+DEMO_MODE=1
+```
+
+未开启时保持原有行为：LLM 可用则 Agent 编排，不可用自动降级规则引擎。
 
 ## 当前状态
 

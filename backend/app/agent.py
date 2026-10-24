@@ -525,7 +525,7 @@ def parse_natural_language(text: str) -> dict[str, Any]:
             if cleaned == stripped:
                 break
             stripped = cleaned
-        m = re.search(r"([\u4e00-\u9fff]{2,6})(?:旅行|旅游|游玩|攻略|自由行|跟团|\d{1,2}日游|[一两二三四五六七]日游)", stripped)
+        m = re.search(r"([\u4e00-\u9fff]{2,6})(?:旅行|旅游|游玩|攻略|自由行|跟团|\d{1,2}日游|[一两二三四五六七]日游|\s*\d{1,2}\s*天|[一两二三四五六七]天)", stripped)
         if m:
             result["city"] = m.group(1)
 

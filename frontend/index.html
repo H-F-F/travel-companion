@@ -2833,6 +2833,7 @@ body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSys
 .nav-link{color:var(--ink2);font-size:14px;font-weight:500;padding:6px 14px;border-radius:999px;}
 .nav-link:hover{background:#eef1f8;color:var(--brand);}
 .nav-link.active{background:var(--brand);color:#fff;}
+.demo-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;color:#b45309;background:#fef3c7;border:1px solid #fcd34d;margin-left:10px;white-space:nowrap;}
 .nav-status{color:var(--ink3);font-size:12px;}
 
 /* ---------- 对话悬浮钮与面板 ---------- */
@@ -2958,6 +2959,7 @@ body, body *{font-family:inherit;}
         <button type="button" class="nav-link" data-nav="results">我的行程</button>
       </nav>
       <div class="nav-status" id="navStatus">一键规划 · 天气联动 · 车票集成</div>
+      <span class="demo-badge" id="demoBadge" style="display:none">演示模式</span>
     </div>
   </header>
 
@@ -6653,13 +6655,22 @@ body, body *{font-family:inherit;}
       }, { cooldownMs:1000, button:triggerButton });
     }
 
+    function showLightTip(message) {
+      var old = document.getElementById("locateTip");
+      if (old) old.remove();
+      var el = document.createElement("div");
+      el.id = "locateTip";
+      el.style.cssText = "position:fixed;top:74px;left:50%;transform:translateX(-50%);z-index:1900;padding:10px 16px;border-radius:12px;background:rgba(24,51,75,.94);color:#fff;font-size:13px;font-weight:600;box-shadow:0 10px 28px rgba(10,30,50,.24);max-width:min(92vw,480px);text-align:center;";
+      el.textContent = message;
+      document.body.appendChild(el);
+      setTimeout(function () { el.remove(); }, 4200);
+    }
+
     async function locateByBrowser() {
       if (!navigator.geolocation) {
-        showNoticeDialog({
-          title: "当前浏览器不支持定位",
-          message: "请点击“选择地址”手动搜索并应用当前位置。",
-          tip: "手动选择地址后，系统同样可以继续生成天气和路线。"
-        });
+        statusEl.textContent = "浏览器不支持定位，请点击“选择地址”手动选择。";
+        renderPlannerAside();
+        showLightTip("浏览器不支持定位，可点击“选择地址”手动选择后继续。");
         return;
       }
       statusEl.textContent = "正在获取当前位置...";
@@ -6687,18 +6698,12 @@ body, body *{font-family:inherit;}
             return;
           }
         } catch (_) {}
-        showNoticeDialog({
-          title: "定位解析失败",
-          message: "当前位置坐标已获取，但没有成功解析出地址。",
-          tip: "请点击“选择地址”手动搜索并确认当前位置。"
-        });
+        statusEl.textContent = "已获取坐标，请点击“选择地址”手动确认。";
+        showLightTip("已获取坐标但未能解析出地址，可手动选择确认。");
         renderPlannerAside();
       } catch (_) {
-        showNoticeDialog({
-          title: "定位失败",
-          message: "浏览器没有成功返回当前位置，请手动选择地址后继续。",
-          tip: "如果浏览器拦截了定位权限，允许后重试即可。"
-        });
+        statusEl.textContent = "未获取到定位，可手动选择地址后继续。";
+        showLightTip("浏览器未返回当前位置，手动选择地址即可继续，不影响规划。");
         renderPlannerAside();
       }
     }
@@ -7354,6 +7359,13 @@ body, body *{font-family:inherit;}
   <script>
     (function () {
       "use strict";
+      // 演示模式徽标：DEMO_MODE=1 时后端禁用 LLM 走规则引擎，前端亮徽标提示
+      fetch("/api/v1/config").then(function (r) { return r.json(); }).then(function (c) {
+        if (c && c.demo_mode) {
+          var b = document.getElementById("demoBadge");
+          if (b) b.style.display = "inline-flex";
+        }
+      }).catch(function () {});
       var links = document.querySelectorAll(".nav-link");
       function setActive(which) {
         links.forEach(function (b) { b.classList.toggle("active", b.dataset.nav === which); });

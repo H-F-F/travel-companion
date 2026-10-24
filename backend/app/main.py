@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from . import export as export_mod
 from . import storage
 from .agent import run_agent, run_agent_stream
+from .llm_client import _demo_mode
 from .engine import (
     build_plan,
     build_plan_check,
@@ -36,7 +37,17 @@ from .engine import (
 )
 from .models import PlanRequest
 
-app = FastAPI(title="AI Travel Companion API", version="0.2.0")
+app = FastAPI(title="AI Travel Companion API", version="0.7.0")
+
+
+@app.get("/api/v1/config")
+async def app_config() -> dict:
+    """运行时配置：演示模式开关与 LLM 配置状态（供前端显示徽标）。"""
+    return {
+        "demo_mode": _demo_mode(),
+        "llm_configured": bool((os.environ.get("LLM_API_KEY") or "").strip()),
+        "version": "0.7.0",
+    }
 
 
 class ChatMessage(BaseModel):

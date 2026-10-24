@@ -246,5 +246,45 @@ def test_stream_llm_unconfigured_error(monkeypatch):
     assert "LLM 未配置" in events[0][1]
 
 
+def test_agent_demo_mode_disables_llm(monkeypatch):
+    """DEMO_MODE=1 时即使 LLM 已配置也强制走规则引擎。"""
+    monkeypatch.setattr("backend.app.llm_client._load_local_env", lambda: None)
+    monkeypatch.setenv("DEMO_MODE", "1")
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("LLM_API_KEY", "sk-fake")
+    monkeypatch.setenv("LLM_MODEL", "fake-model")
+    client = LLMClient()
+    assert not client.available, "演示模式应禁用 LLM"
+    result = agent.run_agent("去西安玩 2 天", [], client)
+    assert result.mode in ("fallback", "engine")
+    assert result.meta.get("strategy") == "engine"
+
+
+def test_config_llm_available_off_demo(monkeypatch):
+    """非演示模式且 LLM 已配置时 available 为 True。"""
+    monkeypatch.setattr("backend.app.llm_client._load_local_env", lambda: None)
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("LLM_API_KEY", "sk-fake")
+    monkeypatch.setenv("LLM_MODEL", "fake-model")
+    client = LLMClient()
+    assert client.available
+
+
+def test_parse_natural_language_city_days():
+    """降级路径的自然语言解析：识别「城市 + N天」结构（含无『去/到』动词句式）。"""
+    assert engine is not None  # 保持模块引用
+    from backend.app.agent import parse_natural_language
+
+    r = parse_natural_language("帮我规划西安 2 天")
+    assert r.get("city") == "西安" and r.get("days") == 2
+    r = parse_natural_language("帮我规划去西安 2 天")
+    assert r.get("city") == "西安" and r.get("days") == 2
+    r = parse_natural_language("帮我去成都 3 日游")
+    assert r.get("city") == "成都" and r.get("days") == 3
+    r = parse_natural_language("帮我规划北京两天")
+    assert r.get("city") == "北京" and r.get("days") == 2
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

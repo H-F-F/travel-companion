@@ -43,6 +43,11 @@ def _load_local_env() -> None:
                 os.environ.setdefault(key, value)
 
 
+def _demo_mode() -> bool:
+    """演示模式：DEMO_MODE=1/true/yes 时强制禁用 LLM，走规则引擎内置数据。"""
+    return os.environ.get("DEMO_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 class LLMError(RuntimeError):
     """LLM 调用失败（未配置、网络、鉴权、响应解析等）。"""
 
@@ -70,6 +75,8 @@ class LLMClient:
 
     @property
     def available(self) -> bool:
+        if _demo_mode():
+            return False  # 演示模式强制禁用 LLM
         return bool(self.base_url and self.api_key and self.model)
 
     def chat(
@@ -81,6 +88,8 @@ class LLMClient:
     ) -> dict[str, Any]:
         """调用 chat/completions，返回 OpenAI 消息对象（含 content / tool_calls）。"""
         if not self.available:
+            if _demo_mode():
+                raise LLMError("演示模式（DEMO_MODE=1）：已禁用 LLM，自动使用规则引擎")
             raise LLMError("LLM 未配置：需要设置 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL")
 
         payload: dict[str, Any] = {
@@ -137,6 +146,9 @@ class LLMClient:
         保证工具编排逻辑与 chat() 完全一致。
         """
         if not self.available:
+            if _demo_mode():
+                yield ("error", "演示模式（DEMO_MODE=1）：已禁用 LLM，自动使用规则引擎")
+                return
             yield ("error", "LLM 未配置：需要设置 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL")
             return
 
