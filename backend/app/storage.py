@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""行程持久化：SQLite 存储（列表 / 详情 / 删除 / 保存），线程安全。"""
+"""行程持久化：SQLite 存储（行程 / 对话会话 / 用户），线程安全。
+
+多账号设计：
+- 所有业务表都带 ``user_id``；``NULL`` 表示游客（匿名）数据，保持旧数据兼容；
+- 传 ``user_id=None`` 的查询只命中游客数据，传具体 ID 则只命中该用户数据；
+- 旧库首次打开时自动 ``ALTER TABLE`` 补列，无需手工迁移。
+"""
 from __future__ import annotations
 
 import json
@@ -28,14 +34,79 @@ def _conn() -> sqlite3.Connection:
             request TEXT DEFAULT ''
         )"""
     )
-    # 迁移：旧表无 request 列时补充
+    # 迁移：旧表缺列时补齐
     cols = [r[1] for r in conn.execute("PRAGMA table_info(plans)").fetchall()]
     if "request" not in cols:
         conn.execute("ALTER TABLE plans ADD COLUMN request TEXT DEFAULT ''")
+    if "user_id" not in cols:
+        conn.execute("ALTER TABLE plans ADD COLUMN user_id INTEGER")
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )"""
+    )
     return conn
 
 
-def save_plan(plan: dict, title: str = "", request: dict | None = None) -> int:
+def _owner_clause(user_id: int | None) -> tuple[str, tuple]:
+    """按归属生成 WHERE 片段：None=游客（user_id IS NULL），否则精确匹配。"""
+    if user_id is None:
+        return "user_id IS NULL", ()
+    return "user_id = ?", (int(user_id),)
+
+
+# ---------------- 用户 ----------------
+
+def create_user(username: str, password_hash: str) -> int | None:
+    """新建用户；用户名已存在时返回 None。"""
+    with _LOCK:
+        conn = _conn()
+        try:
+            cur = conn.execute(
+                "INSERT INTO users(username, password_hash, created_at) VALUES(?,?,?)",
+                (username, password_hash, time.strftime("%Y-%m-%d %H:%M:%S")),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            return None
+        finally:
+            conn.close()
+
+
+def get_user(user_id: int) -> dict | None:
+    """按 ID 取用户（不含密码哈希，供接口返回）。"""
+    with _LOCK:
+        conn = _conn()
+        try:
+            row = conn.execute(
+                "SELECT id, username, created_at FROM users WHERE id=?", (int(user_id),)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+
+def get_user_by_username(username: str) -> dict | None:
+    """按用户名取用户（含密码哈希，仅供登录校验）。"""
+    with _LOCK:
+        conn = _conn()
+        try:
+            row = conn.execute(
+                "SELECT id, username, password_hash, created_at FROM users WHERE username=?",
+                (username,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+
+# ---------------- 行程 ----------------
+
+def save_plan(plan: dict, title: str = "", request: dict | None = None, user_id: int | None = None) -> int:
     """保存一份完整行程 plan，返回自增 id。request 为生成时的请求参数（前端渲染历史用）。"""
     payload = json.dumps(plan, ensure_ascii=False, default=str)
     request_json = json.dumps(request or {}, ensure_ascii=False, default=str)
@@ -52,7 +123,7 @@ def save_plan(plan: dict, title: str = "", request: dict | None = None) -> int:
         conn = _conn()
         try:
             cur = conn.execute(
-                "INSERT INTO plans(created_at, city, days, title, summary, payload, request) VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO plans(created_at, city, days, title, summary, payload, request, user_id) VALUES(?,?,?,?,?,?,?,?)",
                 (
                     time.strftime("%Y-%m-%d %H:%M"),
                     city,
@@ -61,6 +132,7 @@ def save_plan(plan: dict, title: str = "", request: dict | None = None) -> int:
                     json.dumps(summary, ensure_ascii=False),
                     payload,
                     request_json,
+                    None if user_id is None else int(user_id),
                 ),
             )
             conn.commit()
@@ -69,13 +141,14 @@ def save_plan(plan: dict, title: str = "", request: dict | None = None) -> int:
             conn.close()
 
 
-def list_plans(limit: int = 50) -> list[dict]:
+def list_plans(limit: int = 50, user_id: int | None = None) -> list[dict]:
+    where, params = _owner_clause(user_id)
     with _LOCK:
         conn = _conn()
         try:
             rows = conn.execute(
-                "SELECT id, created_at, city, days, title, summary FROM plans ORDER BY id DESC LIMIT ?",
-                (int(limit),),
+                f"SELECT id, created_at, city, days, title, summary FROM plans WHERE {where} ORDER BY id DESC LIMIT ?",
+                params + (int(limit),),
             ).fetchall()
             out = []
             for r in rows:
@@ -90,11 +163,14 @@ def list_plans(limit: int = 50) -> list[dict]:
             conn.close()
 
 
-def get_plan(pid: int) -> dict | None:
+def get_plan(pid: int, user_id: int | None = None) -> dict | None:
+    where, params = _owner_clause(user_id)
     with _LOCK:
         conn = _conn()
         try:
-            row = conn.execute("SELECT * FROM plans WHERE id=?", (int(pid),)).fetchone()
+            row = conn.execute(
+                f"SELECT * FROM plans WHERE id=? AND {where}", (int(pid),) + params
+            ).fetchone()
             if not row:
                 return None
             d = dict(row)
@@ -115,11 +191,12 @@ def get_plan(pid: int) -> dict | None:
             conn.close()
 
 
-def delete_plan(pid: int) -> bool:
+def delete_plan(pid: int, user_id: int | None = None) -> bool:
+    where, params = _owner_clause(user_id)
     with _LOCK:
         conn = _conn()
         try:
-            cur = conn.execute("DELETE FROM plans WHERE id=?", (int(pid),))
+            cur = conn.execute(f"DELETE FROM plans WHERE id=? AND {where}", (int(pid),) + params)
             conn.commit()
             return cur.rowcount > 0
         finally:
@@ -140,22 +217,28 @@ def _sconn() -> sqlite3.Connection:
             messages TEXT NOT NULL
         )"""
     )
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()]
+    if "user_id" not in cols:
+        conn.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
     return conn
 
 
-def save_session_messages(messages: list[dict], session_id: int | None = None) -> int:
-    """保存 / 追加一轮会话消息，返回 session_id（None 时新建会话）。"""
+def save_session_messages(messages: list[dict], session_id: int | None = None, user_id: int | None = None) -> int:
+    """保存 / 追加一轮会话消息，返回 session_id（None 或归属不匹配时新建会话）。"""
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     messages_json = json.dumps(messages or [], ensure_ascii=False, default=str)
+    where, params = _owner_clause(user_id)
     with _LOCK:
         if session_id is not None:
             conn = _sconn()
             try:
-                row = conn.execute("SELECT id FROM sessions WHERE id=?", (int(session_id),)).fetchone()
+                row = conn.execute(
+                    f"SELECT id FROM sessions WHERE id=? AND {where}", (int(session_id),) + params
+                ).fetchone()
                 if row:
                     conn.execute(
-                        "UPDATE sessions SET updated_at=?, messages=? WHERE id=?",
-                        (now, messages_json, int(session_id)),
+                        f"UPDATE sessions SET updated_at=?, messages=? WHERE id=? AND {where}",
+                        (now, messages_json, int(session_id)) + params,
                     )
                     conn.commit()
                     return int(session_id)
@@ -164,8 +247,8 @@ def save_session_messages(messages: list[dict], session_id: int | None = None) -
         conn = _sconn()
         try:
             cur = conn.execute(
-                "INSERT INTO sessions(created_at, updated_at, messages) VALUES(?,?,?)",
-                (now, now, messages_json),
+                "INSERT INTO sessions(created_at, updated_at, messages, user_id) VALUES(?,?,?,?)",
+                (now, now, messages_json, None if user_id is None else int(user_id)),
             )
             conn.commit()
             return int(cur.lastrowid)
@@ -173,12 +256,14 @@ def save_session_messages(messages: list[dict], session_id: int | None = None) -
             conn.close()
 
 
-def get_session_messages(session_id: int) -> dict | None:
+def get_session_messages(session_id: int, user_id: int | None = None) -> dict | None:
+    where, params = _owner_clause(user_id)
     with _LOCK:
         conn = _sconn()
         try:
             row = conn.execute(
-                "SELECT id, created_at, updated_at, messages FROM sessions WHERE id=?", (int(session_id),)
+                f"SELECT id, created_at, updated_at, messages FROM sessions WHERE id=? AND {where}",
+                (int(session_id),) + params,
             ).fetchone()
             if not row:
                 return None
@@ -192,13 +277,14 @@ def get_session_messages(session_id: int) -> dict | None:
             conn.close()
 
 
-def list_sessions(limit: int = 20) -> list[dict]:
+def list_sessions(limit: int = 20, user_id: int | None = None) -> list[dict]:
+    where, params = _owner_clause(user_id)
     with _LOCK:
         conn = _sconn()
         try:
             rows = conn.execute(
-                "SELECT id, created_at, updated_at, messages FROM sessions ORDER BY id DESC LIMIT ?",
-                (int(limit),),
+                f"SELECT id, created_at, updated_at, messages FROM sessions WHERE {where} ORDER BY id DESC LIMIT ?",
+                params + (int(limit),),
             ).fetchall()
             out = []
             for r in rows:
@@ -218,11 +304,12 @@ def list_sessions(limit: int = 20) -> list[dict]:
             conn.close()
 
 
-def delete_session(session_id: int) -> bool:
+def delete_session(session_id: int, user_id: int | None = None) -> bool:
+    where, params = _owner_clause(user_id)
     with _LOCK:
         conn = _sconn()
         try:
-            cur = conn.execute("DELETE FROM sessions WHERE id=?", (int(session_id),))
+            cur = conn.execute(f"DELETE FROM sessions WHERE id=? AND {where}", (int(session_id),) + params)
             conn.commit()
             return cur.rowcount > 0
         finally:

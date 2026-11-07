@@ -2834,6 +2834,26 @@ body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSys
 .nav-link:hover{background:#eef1f8;color:var(--brand);}
 .nav-link.active{background:var(--brand);color:#fff;}
 .demo-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;color:#b45309;background:#fef3c7;border:1px solid #fcd34d;margin-left:10px;white-space:nowrap;}
+.auth-area{display:flex;align-items:center;gap:6px;margin-left:10px;}
+.auth-btn{border:1px solid #d9e1ef;background:#fff;color:#2f6fed;font-size:13px;font-weight:600;padding:5px 14px;border-radius:999px;cursor:pointer;white-space:nowrap;max-width:128px;overflow:hidden;text-overflow:ellipsis;font-family:inherit;}
+.auth-btn:hover{background:#f2f6ff;}
+.auth-btn-ghost{color:#5d6675;border-color:#e6eaf1;}
+.auth-btn-ghost:hover{background:#f6f7fa;}
+.auth-dialog{position:fixed;inset:0;z-index:1700;display:none;align-items:center;justify-content:center;background:rgba(20,30,45,.42);backdrop-filter:blur(3px);padding:16px;}
+.auth-dialog.open{display:flex;}
+.auth-card{width:min(360px,100%);background:#fff;border-radius:18px;padding:22px 24px;box-shadow:0 20px 60px rgba(10,30,50,.28);}
+.auth-card h3{margin:0 0 6px;font-size:18px;color:#1c2430;}
+.auth-close{float:right;border:0;background:#f1f3f7;color:#5d6675;width:30px;height:30px;border-radius:50%;font-size:15px;line-height:1;cursor:pointer;margin-top:-4px;}
+.auth-close:hover{background:#e7ebf2;}
+.auth-hint{color:#8a93a2;font-size:12px;margin:0 0 4px;line-height:1.7;}
+.auth-field{display:block;margin-top:14px;font-size:13px;color:#5d6675;font-weight:600;}
+.auth-field input{display:block;width:100%;margin-top:6px;padding:10px 12px;border:1px solid #dfe5ee;border-radius:10px;font-size:14px;outline:none;box-sizing:border-box;font-family:inherit;}
+.auth-field input:focus{border-color:#2f6fed;box-shadow:0 0 0 3px rgba(47,111,237,.12);}
+.auth-error{min-height:18px;margin-top:10px;color:#d14343;font-size:12px;line-height:1.5;}
+.auth-submit{width:100%;margin-top:6px;padding:11px;border:0;border-radius:11px;background:#2f6fed;color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;}
+.auth-submit:disabled{opacity:.6;cursor:default;}
+.auth-switch{display:block;width:100%;margin-top:12px;border:0;background:none;color:#2f6fed;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}
+@media (max-width:760px){.nav-status{display:none;}.auth-btn{padding:5px 10px;font-size:12px;}}
 .nav-status{color:var(--ink3);font-size:12px;}
 
 /* ---------- 对话悬浮钮与面板 ---------- */
@@ -2945,6 +2965,27 @@ body, body *{font-family:inherit;}
 </style>
 
 <body>
+<script>
+/* 全局注入登录 token：业务代码里的 fetch 无需逐个改动 */
+(function () {
+  var origFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (!origFetch) return;
+  window.fetch = function (input, init) {
+    init = init || {};
+    var token = localStorage.getItem("tc_token");
+    var url = typeof input === "string" ? input : (input && input.url) || "";
+    if (token && url.indexOf("/api/") !== -1) {
+      var headers = init.headers || {};
+      if (typeof Headers !== "undefined" && headers instanceof Headers) {
+        headers.set("Authorization", "Bearer " + token);
+      } else {
+        init.headers = Object.assign({}, headers, { Authorization: "Bearer " + token });
+      }
+    }
+    return origFetch(input, init);
+  };
+})();
+</script>
   
   <!-- ===== 顶部导航（重构后新增）===== -->
   <header class="app-nav" id="appNav">
@@ -2960,6 +3001,10 @@ body, body *{font-family:inherit;}
       </nav>
       <div class="nav-status" id="navStatus">一键规划 · 天气联动 · 车票集成</div>
       <span class="demo-badge" id="demoBadge" style="display:none">演示模式</span>
+      <div class="auth-area" id="authArea">
+        <button type="button" class="auth-btn" id="authBtn" onclick="openAuthDialog()">登录</button>
+        <button type="button" class="auth-btn auth-btn-ghost" id="authLogoutBtn" style="display:none">退出</button>
+      </div>
     </div>
   </header>
 
@@ -7420,6 +7465,24 @@ body, body *{font-family:inherit;}
 
 
 
+<!-- ===== 账号：登录 / 注册 ===== -->
+<div id="authDialog" class="auth-dialog" aria-hidden="true">
+  <div class="auth-card">
+    <button type="button" class="auth-close" onclick="closeAuthDialog()" aria-label="关闭">×</button>
+    <h3 id="authTitle">登录</h3>
+    <p class="auth-hint" id="authHint">登录后行程会绑定到你的账号，换设备也能找回</p>
+    <label class="auth-field">用户名
+      <input id="authUsername" maxlength="20" autocomplete="username" placeholder="2~20 位中文、字母或数字">
+    </label>
+    <label class="auth-field">密码
+      <input id="authPassword" type="password" maxlength="64" autocomplete="current-password" placeholder="至少 6 位">
+    </label>
+    <div class="auth-error" id="authError"></div>
+    <button type="button" class="auth-submit" id="authSubmitBtn">登录</button>
+    <button type="button" class="auth-switch" id="authSwitchBtn">没有账号？去注册</button>
+  </div>
+</div>
+
 <!-- ===== 我的行程面板（历史持久化） ===== -->
 <style>
   .plans-panel { position: fixed; inset: 0; z-index: 1600; display: none; align-items: flex-start; justify-content: center;
@@ -7524,7 +7587,18 @@ body, body *{font-family:inherit;}
     });
   };
   window.exportHistoryPlan = function (id) {
-    window.open("/api/v1/plans/" + id + "/export", "_blank");
+    fetch("/api/v1/plans/" + id + "/export").then(function (res) {
+      if (!res.ok) throw new Error("导出失败，请稍后重试");
+      return res.blob();
+    }).then(function (blob) {
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "travel-plan-" + id + ".html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    }).catch(function (e) { window.alert(e.message || "导出失败"); });
   };
   window.viewHistoryPlan = function (id) {
     fetch("/api/v1/plans/" + id).then(function (res) { return res.json().then(function (d) { return { ok: res.ok, d: d }; }); })
@@ -7591,5 +7665,97 @@ body, body *{font-family:inherit;}
 })();
 </script>
 
+<script>
+/* ===== 账号：登录 / 注册 / 退出 ===== */
+(function () {
+  "use strict";
+  var TOKEN_KEY = "tc_token";
+  var mode = "login";
+
+  function $id(id) { return document.getElementById(id); }
+  function setError(msg) { var el = $id("authError"); if (el) el.textContent = msg || ""; }
+  function updateUI(user) {
+    var btn = $id("authBtn"), out = $id("authLogoutBtn");
+    if (!btn) return;
+    if (user && user.username) {
+      btn.textContent = user.username;
+      btn.title = "已登录";
+      if (out) out.style.display = "inline-flex";
+    } else {
+      btn.textContent = "登录";
+      btn.title = "";
+      if (out) out.style.display = "none";
+    }
+  }
+  function renderMode() {
+    var isLogin = mode === "login";
+    $id("authTitle").textContent = isLogin ? "登录" : "注册";
+    $id("authHint").textContent = isLogin ? "登录后行程会绑定到你的账号，换设备也能找回" : "注册后行程会自动绑定账号，只保存在本机数据库";
+    $id("authSubmitBtn").textContent = isLogin ? "登录" : "注册";
+    $id("authSwitchBtn").textContent = isLogin ? "没有账号？去注册" : "已有账号？去登录";
+    $id("authPassword").setAttribute("autocomplete", isLogin ? "current-password" : "new-password");
+    setError("");
+  }
+  window.openAuthDialog = function () {
+    var dlg = $id("authDialog");
+    if (!dlg) return;
+    mode = "login";
+    renderMode();
+    dlg.classList.add("open");
+    dlg.setAttribute("aria-hidden", "false");
+    setTimeout(function () { $id("authUsername").focus(); }, 60);
+  };
+  window.closeAuthDialog = function () {
+    var dlg = $id("authDialog");
+    if (dlg) { dlg.classList.remove("open"); dlg.setAttribute("aria-hidden", "true"); }
+  };
+  function submit() {
+    var username = ($id("authUsername").value || "").trim();
+    var password = $id("authPassword").value || "";
+    if (!username || !password) { setError("请输入用户名和密码"); return; }
+    setError("");
+    var btn = $id("authSubmitBtn");
+    btn.disabled = true;
+    fetch("/api/v1/auth/" + (mode === "login" ? "login" : "register"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username, password: password })
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (d) { return { ok: res.ok, d: d }; });
+    }).then(function (r) {
+      if (!r.ok) throw new Error((r.d && r.d.detail) || "操作失败");
+      localStorage.setItem(TOKEN_KEY, r.d.token);
+      window.closeAuthDialog();
+      window.location.reload();
+    }).catch(function (e) {
+      setError(e.message || "网络异常，请稍后重试");
+    }).finally(function () { btn.disabled = false; });
+  }
+
+  $id("authSubmitBtn").addEventListener("click", submit);
+  $id("authSwitchBtn").addEventListener("click", function () {
+    mode = mode === "login" ? "register" : "login";
+    renderMode();
+  });
+  $id("authLogoutBtn").addEventListener("click", function () {
+    localStorage.removeItem(TOKEN_KEY);
+    window.location.reload();
+  });
+  $id("authPassword").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") submit();
+  });
+  $id("authDialog").addEventListener("click", function (e) {
+    if (e.target === $id("authDialog")) window.closeAuthDialog();
+  });
+
+  // 启动时恢复登录态；token 失效则清理
+  fetch("/api/v1/auth/me").then(function (res) {
+    return res.ok ? res.json() : null;
+  }).then(function (user) {
+    if (user) updateUI(user);
+    else { localStorage.removeItem(TOKEN_KEY); updateUI(null); }
+  }).catch(function () { updateUI(null); });
+})();
+</script>
 </body>
 </html>

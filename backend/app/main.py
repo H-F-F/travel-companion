@@ -16,11 +16,12 @@ os.environ["NO_PROXY"] = "*"
 os.environ["no_proxy"] = "*"
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import auth
 from . import export as export_mod
 from . import storage
 from .agent import run_agent, run_agent_stream
@@ -37,7 +38,7 @@ from .engine import (
 )
 from .models import PlanRequest
 
-app = FastAPI(title="AI Travel Companion API", version="0.7.0")
+app = FastAPI(title="AI Travel Companion API", version="0.8.0")
 
 
 @app.get("/api/v1/config")
@@ -46,7 +47,7 @@ async def app_config() -> dict:
     return {
         "demo_mode": _demo_mode(),
         "llm_configured": bool((os.environ.get("LLM_API_KEY") or "").strip()),
-        "version": "0.7.0",
+        "version": "0.8.0",
     }
 
 
@@ -60,6 +61,41 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list)
     confirm: dict | None = Field(default=None, description="确认卡参数：用户确认后直接生成行程")
     session_id: int | None = Field(default=None, description="对话会话 ID：传则续写该会话，不传则新建")
+
+
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/v1/auth/register")
+async def auth_register(req: AuthRequest) -> dict:
+    """注册：用户名 + 密码，成功返回 JWT。"""
+    username = auth.validate_username(req.username)
+    password = auth.validate_password(req.password)
+    if storage.get_user_by_username(username):
+        raise HTTPException(status_code=409, detail="用户名已被占用")
+    user_id = await asyncio.to_thread(storage.create_user, username, auth.hash_password(password))
+    if user_id is None:
+        raise HTTPException(status_code=409, detail="用户名已被占用")
+    return {"token": auth.create_token(user_id, username), "user": {"id": user_id, "username": username}}
+
+
+@app.post("/api/v1/auth/login")
+async def auth_login(req: AuthRequest) -> dict:
+    """登录：校验密码后返回 JWT。"""
+    username = (req.username or "").strip()
+    user = await asyncio.to_thread(storage.get_user_by_username, username)
+    valid = bool(user) and auth.verify_password(req.password or "", (user or {}).get("password_hash") or "")
+    if not valid:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    return {"token": auth.create_token(user["id"], user["username"]), "user": {"id": user["id"], "username": user["username"]}}
+
+
+@app.get("/api/v1/auth/me")
+async def auth_me(user: dict = Depends(auth.require_user)) -> dict:
+    """当前登录用户信息（前端用于恢复登录态）。"""
+    return user
 
 
 @app.get("/health")
@@ -112,11 +148,17 @@ async def search_transport_hub_candidates(city: str = "", q: str = "", lat: floa
 
 
 @app.post("/api/v1/plan")
-async def generate_plan(req: PlanRequest) -> dict:
+async def generate_plan(req: PlanRequest, user: dict | None = Depends(auth.optional_user)) -> dict:
     try:
         payload = req.model_dump() if hasattr(req, "model_dump") else req.dict()
         plan = await asyncio.to_thread(build_plan, payload)
-        plan_id = await asyncio.to_thread(storage.save_plan, plan, title=f"{plan.get('location', {}).get('city') or ''}{plan.get('days') or ''}日游", request=payload)
+        plan_id = await asyncio.to_thread(
+            storage.save_plan,
+            plan,
+            title=f"{plan.get('location', {}).get('city') or ''}{plan.get('days') or ''}日游",
+            request=payload,
+            user_id=(user or {}).get("id"),
+        )
         plan["plan_id"] = plan_id
         return plan
     except Exception as exc:
@@ -142,13 +184,14 @@ async def preview_plan(req: PlanRequest) -> dict:
 
 
 @app.post("/api/v1/chat")
-async def chat(req: ChatRequest) -> dict:
+async def chat(req: ChatRequest, user: dict | None = Depends(auth.optional_user)) -> dict:
     """对话式规划入口：LLM Agent 编排工具，支持确认卡（confirm）与校验重试，失败自动降级到规则引擎。
 
     会话持久化：每轮结束把完整对话（历史 + 用户 + 助手）写入 SQLite，
     前端刷新后可通过 session_id 恢复对话。
     """
     try:
+        user_id = (user or {}).get("id")
         history = [{"role": m.role, "content": m.content} for m in req.history]
         result = await asyncio.to_thread(run_agent, req.message, history, None, req.confirm)
         plan_id = None
@@ -158,17 +201,18 @@ async def chat(req: ChatRequest) -> dict:
                 result.plan,
                 title=f"{(result.plan.get('location') or {}).get('city') or ''}{(result.plan.get('days') or '')}日游",
                 request=req.confirm or None,
+                user_id=user_id,
             )
         # 会话持久化：完整消息 = 历史 + 本轮用户 + 本轮助手
         session_id = req.session_id
         if session_id is not None:
-            saved = await asyncio.to_thread(storage.get_session_messages, session_id)
+            saved = await asyncio.to_thread(storage.get_session_messages, session_id, user_id)
             if saved is None:
-                session_id = None  # 会话不存在则新建
+                session_id = None  # 会话不存在或不属于当前用户则新建
         messages = history + [{"role": "user", "content": req.message}]
         if result.reply_text:
             messages.append({"role": "assistant", "content": result.reply_text})
-        session_id = await asyncio.to_thread(storage.save_session_messages, messages, session_id)
+        session_id = await asyncio.to_thread(storage.save_session_messages, messages, session_id, user_id)
         return {
             "reply_text": result.reply_text,
             "steps": [
@@ -189,7 +233,7 @@ async def chat(req: ChatRequest) -> dict:
 # ---------------- 对话流式（SSE） ----------------
 
 @app.post("/api/v1/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, user: dict | None = Depends(auth.optional_user)):
     """对话式规划流式入口：与 /api/v1/chat 同编排，但 LLM 最终生成按 token 推送。
 
     事件协议（SSE `data: {...}` 行）：
@@ -199,6 +243,7 @@ async def chat_stream(req: ChatRequest):
       {"type":"plan","plan":{}}  行程（含 plan_id）
       {"type":"done","mode","reply_text","steps","meta","session_id"} 结束
     """
+    user_id = (user or {}).get("id")
     history = [{"role": m.role, "content": m.content} for m in req.history]
     gen = run_agent_stream(req.message, history, None, req.confirm)
 
@@ -217,18 +262,19 @@ async def chat_stream(req: ChatRequest):
                         ev["plan"],
                         title=f"{(ev['plan'].get('location') or {}).get('city') or ''}{(ev['plan'].get('days') or '')}日游",
                         request=req.confirm or None,
+                        user_id=user_id,
                     )
                     yield f"data: {_sse(ev | {'plan_id': plan_id})}\n\n"
                 elif etype == "done":
                     # 会话持久化：历史 + 本轮用户 + 助手回复
                     if session_id is not None:
-                        saved = await asyncio.to_thread(storage.get_session_messages, session_id)
+                        saved = await asyncio.to_thread(storage.get_session_messages, session_id, user_id)
                         if saved is None:
                             session_id = None
                     messages = history + [{"role": "user", "content": req.message}]
                     if ev.get("reply_text"):
                         messages.append({"role": "assistant", "content": ev["reply_text"]})
-                    session_id = await asyncio.to_thread(storage.save_session_messages, messages, session_id)
+                    session_id = await asyncio.to_thread(storage.save_session_messages, messages, session_id, user_id)
                     yield f"data: {_sse(ev | {'session_id': session_id})}\n\n"
                 else:
                     yield f"data: {_sse(ev)}\n\n"
@@ -269,23 +315,23 @@ def _sse(ev: dict) -> str:
 # ---------------- 对话会话（持久化） ----------------
 
 @app.get("/api/v1/sessions")
-async def list_sessions(limit: int = 20) -> dict:
+async def list_sessions(limit: int = 20, user: dict | None = Depends(auth.optional_user)) -> dict:
     """历史对话会话列表（标题取首条用户消息，不含完整消息）。"""
-    items = await asyncio.to_thread(storage.list_sessions, max(1, min(50, limit)))
+    items = await asyncio.to_thread(storage.list_sessions, max(1, min(50, limit)), (user or {}).get("id"))
     return {"items": items, "total": len(items)}
 
 
 @app.get("/api/v1/sessions/{session_id}")
-async def get_session(session_id: int) -> dict:
-    session = await asyncio.to_thread(storage.get_session_messages, session_id)
+async def get_session(session_id: int, user: dict | None = Depends(auth.optional_user)) -> dict:
+    session = await asyncio.to_thread(storage.get_session_messages, session_id, (user or {}).get("id"))
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
     return session
 
 
 @app.delete("/api/v1/sessions/{session_id}")
-async def delete_session(session_id: int) -> dict:
-    ok = await asyncio.to_thread(storage.delete_session, session_id)
+async def delete_session(session_id: int, user: dict | None = Depends(auth.optional_user)) -> dict:
+    ok = await asyncio.to_thread(storage.delete_session, session_id, (user or {}).get("id"))
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
     return {"ok": True, "id": session_id}
@@ -294,32 +340,32 @@ async def delete_session(session_id: int) -> dict:
 # ---------------- 历史行程（持久化） ----------------
 
 @app.get("/api/v1/plans")
-async def list_plans(limit: int = 30) -> dict:
+async def list_plans(limit: int = 30, user: dict | None = Depends(auth.optional_user)) -> dict:
     """历史行程列表（不含完整 payload，列表页用）。"""
-    items = await asyncio.to_thread(storage.list_plans, max(1, min(100, limit)))
+    items = await asyncio.to_thread(storage.list_plans, max(1, min(100, limit)), (user or {}).get("id"))
     return {"items": items, "total": len(items)}
 
 
 @app.get("/api/v1/plans/{plan_id}")
-async def get_plan_detail(plan_id: int) -> dict:
-    plan = await asyncio.to_thread(storage.get_plan, plan_id)
+async def get_plan_detail(plan_id: int, user: dict | None = Depends(auth.optional_user)) -> dict:
+    plan = await asyncio.to_thread(storage.get_plan, plan_id, (user or {}).get("id"))
     if not plan:
         raise HTTPException(status_code=404, detail="行程不存在")
     return plan
 
 
 @app.delete("/api/v1/plans/{plan_id}")
-async def delete_plan(plan_id: int) -> dict:
-    ok = await asyncio.to_thread(storage.delete_plan, plan_id)
+async def delete_plan(plan_id: int, user: dict | None = Depends(auth.optional_user)) -> dict:
+    ok = await asyncio.to_thread(storage.delete_plan, plan_id, (user or {}).get("id"))
     if not ok:
         raise HTTPException(status_code=404, detail="行程不存在")
     return {"ok": True, "id": plan_id}
 
 
 @app.get("/api/v1/plans/{plan_id}/export", response_class=HTMLResponse)
-async def export_plan(plan_id: int) -> HTMLResponse:
+async def export_plan(plan_id: int, user: dict | None = Depends(auth.optional_user)) -> HTMLResponse:
     """导出一份 HTML 旅行攻略（自包含，可下载/打印为 PDF）。"""
-    plan = await asyncio.to_thread(storage.get_plan, plan_id)
+    plan = await asyncio.to_thread(storage.get_plan, plan_id, (user or {}).get("id"))
     if not plan:
         raise HTTPException(status_code=404, detail="行程不存在")
     payload = plan.get("payload") or {}
